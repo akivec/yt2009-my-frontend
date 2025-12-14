@@ -23,8 +23,25 @@ function trimLeft(input) {
     while(temp.indexOf(" ") == 0) {
         temp = temp.replace(" ", "")
     }
+    while(temp.indexOf("\n") == 0) {
+        temp = temp.replace("\n", "")
+    }
+    while(temp.indexOf("\t") == 0) {
+        temp = temp.replace("\t", "")
+    }
 
     return temp;
+}
+
+function trimRight(input) {
+    var temp = input.split("")
+    while(temp[temp.length - 1] == " "
+    || temp[temp.length - 1] == "\n"
+    || temp[temp.length - 1] == "\t") {
+        temp = temp.slice(0, temp.length - 1)
+    }
+
+    return temp.join("");
 }
 
 // document.querySelector
@@ -210,6 +227,52 @@ if(location.href.indexOf("watch") !== -1) {
     onPlaylistChange();
     $(".playlists-options").onchange = onPlaylistChange;
     $("#playlist-create-btn").onclick = function() {
+        if(document.cookie && document.cookie.indexOf("playlists_sync") !== -1) {
+            // create new playlist through pchelper
+            var name = $(".playlist-name-input").value
+            var r;
+            if (window.XMLHttpRequest) {
+                r = new XMLHttpRequest()
+            } else {
+                r = new ActiveXObject("Microsoft.XMLHTTP");
+            }
+            r.open("POST", "/pchelper_playlists")
+            var params = [
+                "method=create_new",
+                "playlist_name=" + name,
+                "video=" + currentId
+            ].join("&")
+            r.send(params)
+            r.onreadystatechange = function(e) {
+                if(r.readyState == 4 || this.readyState == 4 || e.readyState == 4) {
+                    if(r.status == 200) {
+                        var id = r.responseText;
+
+                        // write cookie and index
+                        var cookies = document.cookie.split(";")
+                        var cookieIndex = false;
+                        for(var c in cookies) {
+                            if(cookies[c].indexOf("playlist_index=") !== -1) {
+                                cookieIndex = trimLeft(cookies[c]).replace(
+                                    "playlist_index=", ""
+                                )
+                            }
+                        }
+
+                        cookieIndex = encodeURIComponent(name + ";" + id)
+                                    + ":" + cookieIndex
+                        document.cookie = "playlist_index=" + cookieIndex
+                                        + "; Path=/"
+                                        + "; expires=Fri, 31 Dec 2066 23:59:59 GMT";
+
+                        $("#addToPlaylistResult").style.display = "block"
+                        $("#addToPlaylistDiv").style.display = "none"
+                    }
+                }
+            }
+            watchpage_initPlaylistsTab();
+            return;
+        }
         var newId = playlistCreate();
         playlistAdd(newId)
         watchpage_initPlaylistsTab();
@@ -249,7 +312,46 @@ if(location.href.indexOf("watch") !== -1) {
         ) + "&" + encodeURIComponent($(".yt2009-channel-link").innerHTML
         ) + ":" + sub;
         document.cookie = "sublist=" + sub
-                        + "; Path=/; expires=Fri, 31 Dec 2066 23:59:59 GMT"
+                        + "; Path=/; expires=Fri, 31 Dec 2066 23:59:59 GMT";
+        
+        
+        if(document.cookie
+        && document.cookie.indexOf("subscriptions_sync") !== -1) {
+            var reqUser = $(".yt2009-channel-link").href.split("/")
+            reqUser = reqUser[reqUser.length - 1]
+            var r;
+            if (window.XMLHttpRequest) {
+                r = new XMLHttpRequest()
+            } else {
+                r = new ActiveXObject("Microsoft.XMLHTTP");
+            }
+            r.open("POST", "/pchelper_subs")
+            r.send("user=" + reqUser)
+
+            // autoshare
+            if(document.cookie
+            && document.cookie.indexOf("pchelper_user=") !== -1
+            && document.cookie.indexOf("sharing-sub") !== -1
+            && document.cookie.indexOf("sharing-enabled") !== -1) {
+                var currentId = "12345678901"
+                var reqParams = [
+                    "type=subscribe",
+                    "video=" + currentId,
+                    "channel_name=" + trimRight(trimLeft(
+                        $(".yt2009-channel-link").innerHTML
+                    )),
+                    "channel_id=" + reqUser
+                ].join("&")
+                var mr;
+                if (window.XMLHttpRequest) {
+                    mr = new XMLHttpRequest()
+                } else {
+                    mr = new ActiveXObject("Microsoft.XMLHTTP");
+                }
+                mr.open("POST", "/autoshare_submit")
+                mr.send(reqParams)
+            }
+        }
     }
     
     // UNSUBSCRIBE
@@ -269,7 +371,21 @@ if(location.href.indexOf("watch") !== -1) {
             ""
         )
         document.cookie = "sublist=" + sub
-                        + "; Path=/; expires=Fri, 31 Dec 2066 23:59:59 GMT"
+                        + "; Path=/; expires=Fri, 31 Dec 2066 23:59:59 GMT";
+
+        if(document.cookie
+        && document.cookie.indexOf("subscriptions_sync") !== -1) {
+            var reqUser = $(".yt2009-channel-link").href.split("/")
+            reqUser = reqUser[reqUser.length - 1]
+            var r;
+            if (window.XMLHttpRequest) {
+                r = new XMLHttpRequest()
+            } else {
+                r = new ActiveXObject("Microsoft.XMLHTTP");
+            }
+            r.open("POST", "/pchelper_subs")
+            r.send("user=" + reqUser + "&state=unsubscribe")
+        }
     }
 
     // check if subscribed
@@ -329,6 +445,51 @@ function switchWatchTab(tabName) {
 // add to favorites
 function favorite_video() {
     var currentId = $(".email-video-url").value.split("?v=")[1]
+    if((localStorage && localStorage.favorites
+    && localStorage.favorites.indexOf("PCHELPER_MANAGED") !== -1)
+    || (document.cookie
+    && document.cookie.indexOf("favorites=PCHELPER_MANAGED") !== -1)) {
+        var r;
+        if (window.XMLHttpRequest) {
+            r = new XMLHttpRequest()
+        } else {
+            r = new ActiveXObject("Microsoft.XMLHTTP");
+        }
+        r.open("POST", "/pchelper_favorites")
+        r.send("video_id=" + currentId)
+        r.onreadystatechange = function(e) {
+            if((r.readyState && r.readyState == 4)
+            || (this.readyState && this.readyState == 4) 
+            || (e.readyState && e.readyState == 4)) {
+                if(r.status >= 400) {
+                    alert("This video is already in your favorites!")
+                    return;
+                }
+                $("#watch-add-faves").className += " hid"
+                $("#watch-remove-faves").className = "watch-action-result"
+
+                // autoshare
+                if(document.cookie
+                && document.cookie.indexOf("pchelper_user=") !== -1
+                && document.cookie.indexOf("sharing-fav") !== -1
+                && document.cookie.indexOf("sharing-enabled") !== -1) {
+                    var reqParams = [
+                        "type=favorite",
+                        "video=" + currentId
+                    ].join("&")
+                    var mr;
+                    if (window.XMLHttpRequest) {
+                        mr = new XMLHttpRequest()
+                    } else {
+                        mr = new ActiveXObject("Microsoft.XMLHTTP");
+                    }
+                    mr.open("POST", "/autoshare_submit")
+                    mr.send(reqParams)
+                }
+            }
+        }
+        return;
+    }
     var favorites = ""
     var videoString = encodeURIComponent(
         $(".watch-vid-ab-title").innerHTML
@@ -380,18 +541,28 @@ function favorite_undo() {
 function onWatchCommentsShowMore() {
     $("#watch-comments-show-more-td").style.display = "none"
     var nextPage = parseInt($(".comments-container").getAttribute("data-page")) + 1
+    var continuationToken = $(".comments-container").getAttribute("data-continuation-token")
     // request
 
+    var r;
     if (window.XMLHttpRequest) {
         r = new XMLHttpRequest()
     } else {
         r = new ActiveXObject("Microsoft.XMLHTTP");
     }
-    r.open("GET", "/get_more_comments")
-    r.setRequestHeader(
-        "page",
-        parseInt($(".comments-container").getAttribute("data-page"))
-    )
+    r.open("GET", "/get_more_comments?r=" + Math.random())
+    if(continuationToken
+    && continuationToken !== "yt2009_comments_continuation_token") {
+        r.setRequestHeader(
+            "continuation",
+            continuationToken
+        )
+    } else {
+        r.setRequestHeader(
+            "page",
+            parseInt($(".comments-container").getAttribute("data-page"))
+        )
+    }
     r.setRequestHeader("source", location.href)
     r.send(null)
     r.onreadystatechange = function(e) {
@@ -400,15 +571,49 @@ function onWatchCommentsShowMore() {
             // add html sent from server
             $(".comments-container").innerHTML += r.responseText
                                                 .split(";yt_continuation=")[0]
-            $(".comments-container").setAttribute(
-                "data-continuation-token",
-                r.responseText.split(";yt_continuation=")[1]
-            )
+            try {
+                $(".comments-container").setAttribute(
+                    "data-continuation-token",
+                    r.responseText.split(";yt_continuation=")[1]
+                )
+            }
+            catch(error) {}
             // calc comment count + add page indicator
             var commentCount = parseInt($("#watch-comment-count").innerHTML)
                             + r.responseText.split("watch-comment-entry").length - 1
             $("#watch-comment-count").innerHTML = commentCount
             $(".comments-container").setAttribute("data-page", nextPage)
+        }
+    }
+}
+
+// comment replies
+function loadReplies(continuation, button, commentId) {
+    button.innerHTML = "&raquo; ..."
+    var r;
+    if (window.XMLHttpRequest) {
+        r = new XMLHttpRequest()
+    } else {
+        r = new ActiveXObject("Microsoft.XMLHTTP");
+    }
+    r.open("GET", "/comment_get_replies?r=" + Math.random())
+    r.setRequestHeader(
+        "continuation",
+        continuation
+    )
+    r.setRequestHeader(
+        "original-comment",
+        commentId
+    )
+    r.setRequestHeader("source", location.href)
+    r.send(null)
+    r.onreadystatechange = function(e) {
+        if(r.readyState == 4 || this.readyState == 4 || e.readyState == 4) {
+            var z = document.getElementById("yt2009-reply-holder-" + commentId)
+            setTimeout(function() {
+                button.parentNode.removeChild(button)
+                z.innerHTML += r.responseText
+            }, 50)
         }
     }
 }
@@ -454,6 +659,7 @@ function watchpage_initPlaylistsTab() {
         cookieIndex = " "
     }
 
+    var addedPlaylists = 0;
     var playlists = cookieIndex.split(":")
     for(var p in playlists) {
         var playlist = decodeURIComponent(playlists[p])
@@ -465,12 +671,16 @@ function watchpage_initPlaylistsTab() {
             optionCreate.setAttribute("value", playlistId)
             optionCreate.innerHTML = playlistName
             $(".playlists-options").appendChild(optionCreate)
+            addedPlaylists++
         }
     }
 
     var optionCreate = document.createElement("option");
     optionCreate.setAttribute("value", "override-createnew")
     optionCreate.innerHTML = "[ New Playlist ]"
+    if(addedPlaylists >= 1) {
+        optionCreate.style.display = "none"
+    }
     $(".playlists-options").appendChild(optionCreate)
 }
 
@@ -510,6 +720,10 @@ function playlistCreate() {
         }
     }
 
+    if(!cookieIndex) {
+        cookieIndex = ""
+    }
+
     cookieIndex = encodeURIComponent(name + ";" + id) + ":" + cookieIndex
     document.cookie = "playlist_index=" + cookieIndex
                       + "; Path=/; expires=Fri, 31 Dec 2066 23:59:59 GMT"
@@ -519,10 +733,60 @@ function playlistCreate() {
 
 
 // watchpage: add current video to playlist
-function playlistAdd(id) {
-    var currentId = $(".email-video-url").value.split("?v=")[1]
+function playlistAdd(id, videoId) {
+    var currentId = videoId;
+    if(!videoId) {
+        try {
+            currentId = $(".email-video-url").value.split("?v=")[1]
+        }
+        catch(error) {}
+    }
+
+    if(document.cookie && document.cookie.indexOf("playlists_sync") !== -1) {
+        // pchelper playlist
+        var r;
+        if (window.XMLHttpRequest) {
+            r = new XMLHttpRequest()
+        } else {
+            r = new ActiveXObject("Microsoft.XMLHTTP");
+        }
+        r.open("POST", "/pchelper_playlists")
+        var params = [
+            "method=add_existing",
+            "playlist_id=" + id,
+            "video=" + currentId
+        ].join("&")
+        r.send(params)
+        $("#addToPlaylistResult").style.display = "block"
+        $("#addToPlaylistDiv").style.display = "none"
+        return;
+    }
+
     var videoName = $(".watch-vid-ab-title").innerHTML
     var viewCount = $("#watch-view-count").innerHTML
+    if(videoId) {
+        // adding from channelpage
+        var title = $("#playnav-curvideo-title")
+        if(title.getElementsByTagName
+        && title.getElementsByTagName("span")
+        && title.getElementsByTagName("span")[0]) {
+            videoName = $("#playnav-curvideo-title")
+                        .getElementsByTagName("span")[0]
+                        .innerHTML;
+        } else {
+            videoName = $("#playnav-curvideo-title").innerHTML;
+        }
+        if(document.getElementById("playnav-curvideo-view-count")) {
+            viewCount = $("#playnav-curvideo-view-count")
+                        .innerHTML
+                        .split(" ")[0];
+        } else {
+            viewCount = $("#playnav-curvideo-info-line")
+                        .innerHTML.split(" views")[0]
+            viewCount = viewCount.split(" ")
+            viewCount = viewCount[viewCount.length - 1]
+        }
+    }
     var starRating = "5.0"
     var tempStars = 0
     var stars = document.getElementById("ratingStars").getElementsByTagName("a")
@@ -689,25 +953,6 @@ function showStars(rating, source) {
     }
 }
 
-// fastload: refetch comments
-function commandComments() {
-    var r;
-    if (window.XMLHttpRequest) {
-        r = new XMLHttpRequest()
-    } else {
-        r = new ActiveXObject("Microsoft.XMLHTTP");
-    }
-    var r = new XMLHttpRequest();
-    var id = location.href.split("v=")[1].split("&")[0].split("#")[0]
-    r.open("GET", "/fastload_initial_comments?id=" + id)
-    r.send(null)
-    r.onreadystatechange = function(e) {
-        if(r.readyState == 4 || this.readyState == 4 || e.readyState == 4) {
-            $(".comments-container").innerHTML += r.responseText
-        }
-    }
-}
-
 function clearStars() {
     showStars(fullRating, "unhover")
 }
@@ -726,6 +971,29 @@ function rateVid(rating) {
     r.onreadystatechange = function(e) {
         if(r.readyState == 4 || this.readyState == 4 || e.readyState == 4) {
             ratingText.innerHTML = "Thanks for rating!"
+        }
+
+        // pchelper autosharing
+        if(document.cookie
+        && document.cookie.indexOf("pchelper_user=")
+        && document.cookie.indexOf("sharing-like") !== -1
+        && document.cookie.indexOf("sharing-enabled") !== -1) {
+            var currentId = $(".email-video-url").value.split("?v=")[1]
+            var reqParams = [
+                "type=rate",
+                "video=" + currentId,
+                "rating=" + parseInt(
+                    $(".yt2009-stars").getAttribute("title")
+                )
+            ].join("&")
+            var mr;
+            if (window.XMLHttpRequest) {
+                mr = new XMLHttpRequest()
+            } else {
+                mr = new ActiveXObject("Microsoft.XMLHTTP");
+            }
+            mr.open("POST", "/autoshare_submit")
+            mr.send(reqParams)
         }
     }
 }
@@ -788,6 +1056,31 @@ function commentSend() {
                 a.innerHTML = "(help)"
                 eBox.appendChild(a)
                 mc.appendChild(eBox)
+            }
+
+            // pchelper autosharing
+            if(document.cookie
+            && document.cookie.indexOf("pchelper_user") !== -1
+            && document.cookie.indexOf("comments_add_youtube") !== -1
+            && document.cookie.indexOf("sharing-enabled") !== -1
+            && document.cookie.indexOf("sharing-comment") !== -1) {
+                // autoshare
+                var currentId = $(".email-video-url").value.split("?v=")[1]
+                var reqParams = [
+                    "type=comment",
+                    "video=" + currentId,
+                    "comment=" + trimRight(trimLeft(
+                        $("#comment_textarea_main_comment").value
+                    )).split("=").join("").split("&").join("")
+                ].join("&")
+                var mr;
+                if (window.XMLHttpRequest) {
+                    mr = new XMLHttpRequest()
+                } else {
+                    mr = new ActiveXObject("Microsoft.XMLHTTP");
+                }
+                mr.open("POST", "/autoshare_submit")
+                mr.send(reqParams)
             }
         }
     }
@@ -1204,6 +1497,12 @@ function toggleLights() {
     }
 }
 
+// search hotfix
+function yt2009_search() {
+    var query = document.getElementById("masthead-search-term").value
+    window.location = "/results?search_query=" + query.split(" ").join("+")
+}
+
 /*
 =======
 channels
@@ -1233,12 +1532,20 @@ function switchVideo(video) {
         var fmtMap = "5/0/7/0/0"
         var fmtUrls = "5|http://" + location.host
                       + "/channel_fh264_getvideo?v=" + id
+        try {
+            if(gcon) {
+                videoUrl += gcon
+                fmtUrls += decodeURIComponent(gcon).replace(",", "&gcon=")
+            }
+        }
+        catch(error) {}
         videoUrl += "&fmt_map=" + encodeURIComponent(fmtMap)
         videoUrl += "&fmt_url_map=" + encodeURIComponent(fmtUrls)
     }
     if(customPlayerUrl.indexOf("2012.swf") !== -1
     || customPlayerUrl.indexOf("cps2.swf") !== -1) {
         videoUrl += "&BASE_YT_URL=" + baseUrlSetting
+        videoUrl += "&iurl=" + "http://i.ytimg.com/vi/" + id + "/hqdefault.jpg";
     }
 
     var infoTitle = $("#playnav-curvideo-title")
@@ -1270,6 +1577,8 @@ function switchVideo(video) {
         video.className = "playnav-item playnav-video selected playnav-item-selected"
     }
     
+    // share tab
+    $("#playnav-panel-share-link").value = "http://youtu.be/" + id
 }
 
 // other playnav tabs (all/uploads/playlists etc)
@@ -1374,6 +1683,10 @@ function playnav_switchPanel(tabName) {
         }
         case "favorite": {
             playnav_favorite_video();
+            break;
+        }
+        case "playlists": {
+            createPlaynavPlaylists()
             break;
         }
         case "flag": {
@@ -1532,6 +1845,50 @@ function grid_fillFromScrollbox() {
 // playnav: favorite videos
 function playnav_favorite_video() {
     var currentId = currentVideo;
+    if((localStorage && localStorage.favorites
+    && localStorage.favorites.indexOf("PCHELPER_MANAGED") !== -1)
+    || (document.cookie
+    && document.cookie.indexOf("favorites=PCHELPER_MANAGED") !== -1)) {
+        var r;
+        if (window.XMLHttpRequest) {
+            r = new XMLHttpRequest()
+        } else {
+            r = new ActiveXObject("Microsoft.XMLHTTP");
+        }
+        r.open("POST", "/pchelper_favorites")
+        r.send("video_id=" + currentId)
+
+        r.onreadystatechange = function(e) {
+            if((r.readyState && r.readyState == 4)
+            || (this.readyState && this.readyState == 4) 
+            || (e.readyState && e.readyState == 4)) {
+                if(r.status >= 400) {
+                    alert("This video is already in your favorites!")
+                    return;
+                }
+
+                // autoshare
+                if(document.cookie
+                && document.cookie.indexOf("pchelper_user=") !== -1
+                && document.cookie.indexOf("sharing-fav") !== -1
+                && document.cookie.indexOf("sharing-enabled") !== -1) {
+                    var reqParams = [
+                        "type=favorite",
+                        "video=" + currentId
+                    ].join("&")
+                    var mr;
+                    if (window.XMLHttpRequest) {
+                        mr = new XMLHttpRequest()
+                    } else {
+                        mr = new ActiveXObject("Microsoft.XMLHTTP");
+                    }
+                    mr.open("POST", "/autoshare_submit")
+                    mr.send(reqParams)
+                }
+            }
+        }
+        return;
+    }
     var videoString = encodeURIComponent(
         document.querySelector(".video-title-" + currentId).innerHTML
         + "&" + document.querySelector(".video-meta-" + currentId)
@@ -1567,6 +1924,44 @@ function subscribe() {
         catch(error) {}
     }
 
+    if(document.cookie
+    && document.cookie.indexOf("subscriptions_sync") !== -1) {
+        var reqUser = location.pathname.split("/")
+        reqUser = reqUser[reqUser.length - 1]
+        var r;
+        if (window.XMLHttpRequest) {
+            r = new XMLHttpRequest()
+        } else {
+            r = new ActiveXObject("Microsoft.XMLHTTP");
+        }
+        r.open("POST", "/pchelper_subs")
+        r.send("user=" + reqUser)
+
+        // autoshare
+        if(document.cookie
+        && document.cookie.indexOf("pchelper_user=") !== -1
+        && document.cookie.indexOf("sharing-sub") !== -1
+        && document.cookie.indexOf("sharing-enabled") !== -1) {
+            var currentId = "12345678901"
+            var reqParams = [
+                "type=subscribe",
+                "video=" + currentId,
+                "channel_name=" + trimRight(trimLeft(
+                    $("#channel_title").innerHTML
+                )),
+                "channel_id=" + reqUser
+            ].join("&")
+            var mr;
+            if (window.XMLHttpRequest) {
+                mr = new XMLHttpRequest()
+            } else {
+                mr = new ActiveXObject("Microsoft.XMLHTTP");
+            }
+            mr.open("POST", "/autoshare_submit")
+            mr.send(reqParams)
+        }
+    }
+
     // write sub
     updateSublist()
     sub = encodeURIComponent(location.pathname)
@@ -1587,6 +1982,20 @@ function unsubscribe() {
     for(var sel in e) {
         try {e[sel].className = "subscribe-div yt2009-subscribe-button-hook"}
         catch(error) {}
+    }
+
+    if(document.cookie
+    && document.cookie.indexOf("subscriptions_sync") !== -1) {
+        var reqUser = location.pathname.split("/")
+        reqUser = reqUser[reqUser.length - 1]
+        var r;
+        if (window.XMLHttpRequest) {
+            r = new XMLHttpRequest()
+        } else {
+            r = new ActiveXObject("Microsoft.XMLHTTP");
+        }
+        r.open("POST", "/pchelper_subs")
+        r.send("user=" + reqUser + "&state=unsubscribe")
     }
     
     // wywalanie z cookie
@@ -1655,6 +2064,136 @@ function playnav_sort(sortMode) {
     }
 }
 
+// playnav more
+function playnav_more(continuation) {
+    var d = document.getElementById("playnav-more-continuation")
+    d.parentNode.removeChild(d)
+
+    $("#playnav-play-loading").style.display = "block"
+    var r;
+    if (window.XMLHttpRequest) {
+        r = new XMLHttpRequest()
+    } else {
+        r = new ActiveXObject("Microsoft.XMLHTTP");
+    }
+    r.open("GET", "/channel_sort?rt=" + Math.random())
+    r.setRequestHeader("source", location.pathname)
+    r.setRequestHeader("continuation", continuation)
+    r.send(null)
+    r.onreadystatechange = function(e) {
+        if(r.readyState == 4 || this.readyState == 4 || e.readyState == 4) {
+            $("#playnav-play-loading").style.display = "none"
+            $(".uploads-filtered").innerHTML += r.responseText
+        }
+    }
+}
+
+// playnav playlists for adding into
+var playnavPlaylistsFirstInit = false;
+
+function playnavAddPlaylist(name, id) {
+    var optionCreate = document.createElement("option");
+    optionCreate.setAttribute("value", id)
+    optionCreate.innerHTML = name.split("<").join("&lt;").split(">").join("&gt;")
+    $(".playlists-options").appendChild(optionCreate)
+}
+
+function createPlaynavPlaylists() {
+    if(!playnavPlaylistsFirstInit) {
+        $("#playlist-create-btn").onclick = function() {
+            if(document.cookie && document.cookie.indexOf("playlists_sync") !== -1) {
+                // create new playlist through pchelper
+                var name = $(".playlist-name-input").value
+                var r;
+                if (window.XMLHttpRequest) {
+                    r = new XMLHttpRequest()
+                } else {
+                    r = new ActiveXObject("Microsoft.XMLHTTP");
+                }
+                r.open("POST", "/pchelper_playlists")
+                var params = [
+                    "method=create_new",
+                    "playlist_name=" + name,
+                    "video=" + currentVideo
+                ].join("&")
+                r.send(params)
+                r.onreadystatechange = function(e) {
+                    if(r.readyState == 4 || this.readyState == 4 || e.readyState == 4) {
+                        if(r.status == 200) {
+                            var id = r.responseText;
+
+                            // write cookie and index
+                            var cookies = document.cookie.split(";")
+                            var cookieIndex = false;
+                            for(var c in cookies) {
+                                if(cookies[c].indexOf("playlist_index=") !== -1) {
+                                    cookieIndex = trimLeft(cookies[c]).replace(
+                                        "playlist_index=", ""
+                                    )
+                                }
+                            }
+
+                            cookieIndex = encodeURIComponent(name + ";" + id)
+                                        + ":" + cookieIndex
+                            document.cookie = "playlist_index=" + cookieIndex
+                                            + "; Path=/"
+                                            + "; expires=Fri, 31 Dec 2066 23:59:59 GMT";
+
+                            $("#addToPlaylistResult").style.display = "block"
+                            $("#addToPlaylistDiv").style.display = "none"
+                        }
+                    }
+                }
+                return;
+            }
+            var newId = playlistCreate();
+            playlistAdd(newId, currentVideo)
+        }
+        $("#playlist-add-btn").onclick = function() {
+            onPlaylistChange();
+            playlistAdd(plSelectedOption.getAttribute("value"), currentVideo);
+            playnav_switchPanel("playlists")
+        }
+    }
+
+    playnavPlaylistsFirstInit = true;
+
+    $(".playlist-create").style.display = "none"
+    $(".playlist-add").style.display = "inline-block"
+
+    $(".playlists-options").innerHTML = ""
+
+    var addedPlaylists = 0
+    if(document.cookie
+    && document.cookie.indexOf("playlist_index=") !== -1
+    && document.cookie.indexOf("playlist_index=;") == -1) {
+        var index = document.cookie.split("playlist_index=")[1].split(";")[0]
+        var playlists = index.split(":")
+        for(var p in playlists) {
+            var playlist = decodeURIComponent(playlists[p])
+            var playlistName = playlist.split(";")[0];
+            var playlistId = playlist.split(";")[1];
+            
+            if(playlistId) {
+                playnavAddPlaylist(playlistName, playlistId)
+                addedPlaylists++
+            }
+        }
+    }
+
+    var optionCreate = document.createElement("option");
+    optionCreate.setAttribute("value", "override-createnew")
+    optionCreate.innerHTML = "[ New Playlist ]"
+    if(addedPlaylists >= 1) {
+        optionCreate.style.display = "none"
+    } else {
+        $(".playlist-create").style.display = "inline-block"
+        $(".playlist-add").style.display = "none"
+    }
+    $(".playlists-options").appendChild(optionCreate)
+    $(".playlists-options").onchange = onPlaylistChange;
+}
+
 // flip!!
 // taken from nbedit_watch.js
 // if you see this before apr 1, don't ruin the surprise to others!
@@ -1681,15 +2220,21 @@ if((location.href.indexOf("/watch") !== -1
 
     // add css and setup player
     if(navigator.userAgent.indexOf("MSIE") == -1) {
-        var r = new XMLHttpRequest()
+        var r;
+        if (window.XMLHttpRequest) {
+            r = new XMLHttpRequest()
+        } else {
+            r = new ActiveXObject("Microsoft.XMLHTTP");
+        }
         r.open("GET", "/assets/site-assets/apr1.css")
         r.send(null)
-        r.addEventListener("load", function(e) {
-            var style = document.createElement("style")
-            style.innerHTML = r.responseText;
-            document.body.appendChild(style)
-        }, false)
-
+        r.onreadystatechange = function(e) {
+            if(r.readyState == 4 || this.readyState == 4 || e.readyState == 4) {
+                var style = document.createElement("style")
+                style.innerHTML = r.responseText;
+                document.body.appendChild(style)
+            }
+        }
 
         var playerPath = document.getElementsByTagName("embed")[0].getAttribute("src")
         document.querySelector(".flash-video").innerHTML = '\
@@ -1980,4 +2525,45 @@ function switchSize(width, height, element) {
 // hide the embed creator
 function close_embed() {
     $("#watch-customize-embed-div").style.display = "none"
+}
+
+/*
+======
+show more from if no related
+======
+*/
+try {
+    var related = getElementsByClassName(
+        document.getElementById("watch-related-discoverbox"),
+        "video-entry"
+    )
+    if(related.length <= 0) {
+        var channelVids = document.getElementById("watch-channel-videos-panel")
+                        .getElementsByTagName("h2")[0]
+        toggleExpander(channelVids)
+
+        var relatedExpander = document.getElementById("watch-related-videos-panel")
+                            .getElementsByTagName("h2")[0]
+        toggleExpander(relatedExpander)
+    }
+}
+catch(error) {}
+
+/*
+======
+update recommended rss if should
+======
+*/
+if(location.href.indexOf("/watch") !== -1
+&& document.cookie && document.cookie.indexOf("rec_rss_id=") !== -1) {
+    var rssId = document.cookie.split("rec_rss_id=")[1].split(";")[0]
+    var r;
+    if (window.XMLHttpRequest) {
+        r = new XMLHttpRequest()
+    } else {
+        r = new ActiveXObject("Microsoft.XMLHTTP");
+    }
+    r.open("POST", "/rec-submit")
+    r.setRequestHeader("source", location.href)
+    r.send(null)
 }

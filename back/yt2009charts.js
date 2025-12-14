@@ -389,6 +389,7 @@ module.exports = {
                 let x = chartXStart + ((chartXSize / 100) * c.p)
                 let lineYStart = chartYStart + 20
                 let tY = Math.floor(c.p / 100 * updates)
+                if(!polyline[tY]) return;
                 try {
                     polyline[tY].split(",")[1]
                 }
@@ -455,8 +456,13 @@ module.exports = {
     },
 
     "genWorld": function(req, res) {
+        let bg = "white"
+        if(req.query.cbg) {
+            bg = "#" + req.query.cbg.replace(/[^a-zA-Z0-9]/g, "")
+        }
+
         let command = [
-            "magick -size 440x220 xc:white"
+            "magick -size 440x220 xc:" + bg
         ]
 
         let chco = []

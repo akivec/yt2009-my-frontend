@@ -1,6 +1,6 @@
 {
   "name": "yt2009",
-  "version": "1.13.3.1",
+  "version": "1.24",
   "description": "2009 frontend for youtube",
   "main": "back/backend.js",
   "scripts": {
@@ -13,14 +13,13 @@
     "frontend"
   ],
   "dependencies": {
-    "express": "latest",
-    "google-protobuf": "^3.21.2",
+    "express": "^4.21.2",
+    "google-protobuf": "3.21.2",
     "maxmind-db-reader": "^0.2.1",
     "node-fetch": "^2.6.7",
     "node-html-parser": "^5.3.3",
     "readline-sync": "^1.4.10",
-    "ytdl-core": "latest",
-    "ws": "latest"
+    "ws": ">=1.1.5"
   },
   "author": "dxegom",
   "license": "ISC"

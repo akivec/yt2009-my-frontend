@@ -224,3 +224,40 @@ a[href="/my_videos_upload"] span {
 #watch-tab-stats-audiences-countries {
     margin-left: 250px;
 }
+
+
+#watch-live-discoverbox {
+    padding: 10px 10px;
+    padding-left: 3px;
+}
+#live-chat-t {
+    padding: 10px 10px;
+    overflow-x: hidden;
+}
+#live-chat-t td {
+    padding-top: 5px;
+}
+.live-chat-message .author-username {
+    width: 100px;
+    max-width: 100px;
+}
+
+
+.yt2009-sup-icon {
+    color: white;
+    background-color: darkred;
+    padding: 1px 4px;
+    cursor: default;
+}
+
+.watch-replies-show-link {
+    margin: 7px 9px;
+    display: block;
+    font-weight: bold;
+    margin-top: 10px;
+}
+
+.extended-comment-likecount .watch-comment-voting,
+.extended-comment-likecount .watch-comment-voting-off {
+    width: 97px;
+}

@@ -104,14 +104,67 @@ if(process.env.YT2009_REDIR) {
     cfg.redirmode = process.env.YT2009_REDIR;
 }
 
-// set ac
-if(process.env.YT2009_AC) {
-    cfg.ac = process.env.YT2009_AC;
+// set gdata auth requirement
+switch (process.env.YT2009_GDATA_AUTH) {
+    case 'true':
+        cfg.gdata_auth = true;
+        break;
+    case 'false':
+        cfg.gdata_auth = false;
+        break;
+    default:
+        throw new Error('invalid YT2009_GDATA_AUTH')
 }
 
-// set gdata auth requirement
-if(process.env.YT2009_GDATA_AUTH) {
-    cfg.gdata_auth = process.env.YT2009_GDATA_AUTH;
+// set reencode device list
+if(process.env.YT2009_REENCODE_DEVS) {
+    cfg.reencode_devs = process.env.YT2009_REENCODE_DEVS;
+}
+
+// set trustedcontext
+switch (process.env.YT2009_TRUSTEDCONTEXT) {
+    case 'true':
+        cfg.trusted_context = true;
+        break;
+    case 'false':
+        cfg.trusted_context = false;
+        break;
+}
+
+// set trustedcontext override
+if(process.env.YT2009_TCOVERRIDE) {
+    cfg.tc_override_key = process.env.YT2009_TCOVERRIDE;
+}
+
+// set data api key
+if(process.env.YT2009_DATA_API_KEY) {
+    cfg.data_api_key = process.env.YT2009_DATA_API_KEY;
+}
+
+// set file upload limit
+if(process.env.YT2009_FILE_LIMIT
+&& !isNaN(parseInt(process.env.YT2009_FILE_LIMIT))) {
+    cfg.file_limit = parseInt(process.env.YT2009_FILE_LIMIT);
+}
+
+// set defaultf
+switch (process.env.YT2009_DEFAULTF) {
+    case 'true':
+        cfg.default_f = true;
+        break;
+    case 'false':
+        cfg.default_f = false;
+        break;
+}
+
+// set defaultfh264
+switch (process.env.YT2009_DEFAULTFH264) {
+    case 'true':
+        cfg.default_fh264 = true;
+        break;
+    case 'false':
+        cfg.default_fh264 = false;
+        break;
 }
 
 // set ssl

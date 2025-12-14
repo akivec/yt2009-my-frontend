@@ -19,6 +19,8 @@ let gdataAuths = require("./cache_dir/gdata_auths.json")
 module.exports = {
     "isAuthorized": function(req, res, onError) {
         if(!config.gdata_auth
+        || (config.gdata_auth && !config.tokens)
+        || (config.gdata_auth && !config.tokens[0])
         || (config.gdata_auth && config.tokens[0] == "*")) {
             return true;
         }
@@ -31,6 +33,11 @@ module.exports = {
             deviceId = req.headers["x-gdata-device"]
                                .split("device-id=\"")[1]
                                .split("\"")[0];
+        }
+        if(req.headers["x-goog-device-auth"]
+        && req.headers["x-goog-device-auth"].includes("device_id=")) {
+            deviceId = req.headers["x-goog-device-auth"]
+                          .split("device_id=")[1].split(",")[0]
         }
 
         // or get auth token
@@ -114,9 +121,21 @@ module.exports = {
             res.sendStatus(400)
             return;
         }
+
+        if(req.query.device.length > 9) {
+            res.send(`<!DOCTYPE html><html lang="en"><head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        </head><body>
+            possibly an invalid device id was sent!<br>
+            clear the app data to generate a new one and try again.
+        </body></html>`)
+            return;
+        }
+
         req.query.device = req.query.device
                            .replace(/[^a-zA-Z0-9]/g, "")
-                           .substring(0, 6)
+                           .substring(0, 9)
         
         let msg = ""
         if(req.query.c) {
@@ -168,20 +187,27 @@ module.exports = {
             return;
         }
 
-        device = device.replace(/[^a-zA-Z0-9]/g, "").substring(0, 6)
+        device = device.replace(/[^a-zA-Z0-9]/g, "").substring(0, 9)
 
-        if(config.templocked_tokens.includes(token)) {
+        if(config.templocked_tokens
+        && config.templocked_tokens.includes(token)) {
             res.redirect("/mobile/gdata_gen_auth_page?device=" + device + "&c=2")
             return;
         }
-        if(!config.tokens.includes(token)) {
+        if(config.tokens
+        && !config.tokens.includes(token)) {
             res.redirect("/mobile/gdata_gen_auth_page?device=" + device + "&c=1")
             return;
         }
 
         // token valid - enter in
         gdataAuths[device] = token;
-        res.send("OK - reopen mobile app!")
+        res.send(`<!DOCTYPE html><html lang="en"><head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        </head><body>
+            OK - reopen mobile app!
+        </body></html>`)
         //res.redirect("/mobile/gdata_gen_auth_page?device=" + device + "&c=3")
     }
 }

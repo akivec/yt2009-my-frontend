@@ -110,6 +110,8 @@
 
 		<div class="group1">
 			<h2>/watch</h2>
+			<input type="checkbox" id="watch-allow-clientside-ryd" title="nie czeka jeśli api return youtube dislike zajmuje dłużej niż zazwyczaj żeby otrzymać ocenę w gwiazdkach.">
+			<label for="watch-allow-clientside-ryd">allow_clientside_ryd</label><br>
 			<input type="checkbox" id="watch-annotation-gradients" title="dodaje wcześniej widoczne gradienty na adnotacjach w html5.">
 			<label for="watch-annotation-gradients">annotation_gradients</label><br>
 			<i id="leg_annot_notice">annotation_gradients nie jest celnym odwzorowaniem adnotacji z flash.<br>zostało dodane ze względu na poprzednią implementację adnotacji w html5.</i><br>
@@ -138,8 +140,14 @@
 			<label for="watch-enable-stats-countback">enable_stats_countback</label><br>
 			<input type="checkbox" id="watch-exclude-cs" title="ukrywa twoje komentarze w /comment_search">
 			<label for="watch-exclude-cs">exclude_cs</label><br>
-			<input type="checkbox" id="watch-exp-related" title="pokazuje podobne filmy bazując na tagach oglądanego filmu">
+			<input type="checkbox" id="watch-exp-related" title="pokazuje tylko stare podobne filmy bazując na tagach oglądanego filmu">
 			<label for="watch-exp-related">exp_related</label><br>
+			<input type="checkbox" id="watch-exp-sabr" title="używa technologii SABR do odtwarzania filmów. szybszy start odtwarzania, wymaga jednak lepszego sprzętu.">
+			<label for="watch-exp-sabr">exp_sabr</label><br>
+			<input type="checkbox" id="watch-exp-sabr-audiotracks" title="umożliwia zmianę ścieżki audio w filmach używając SABR.">
+			<label for="watch-exp-sabr-audiotracks">exp_sabr_audiotracks</label><br>
+			<input type="checkbox" id="watch-exp-sabr-enable-superresolution" title="umożliwia oglądanie superrozdzielczości filmów.">
+			<label for="watch-exp-sabr-enable-superresolution">exp_sabr_enable_superresolution</label><br>
 			<input type="checkbox" id="watch-fake-upload-date" title="fake rok wrzucenia filmu jako 2009">
 			<label for="watch-fake-upload-date">fake_upload_date</label>
 			<input type="text" id="watch-fake-upload-date-input" autocomplete="off" spellcheck="false" placeholder="tryb">
@@ -154,6 +162,8 @@
 			<label for="watch-homepage-contribute">homepage_contribute</label><br>
 			<input type="checkbox" id="watch-old-banners" title="używa starych banerów kiedy możliwe bez używania wayback_features.">
 			<label for="watch-old-banners">old_banners</label><br>
+			<input type="checkbox" id="watch-old-match-exp-rel" title="używa daty z old dla wyszukiwań jako progu dla exp_related.">
+			<label for="watch-old-match-exp-rel">old_match_exp_rel</label><br>
 			<input type="checkbox" id="watch-realistic-view-count" title="bardziej realistyczna na 2009 liczba wyświetleń i ratingów">
 			<label for="watch-realistic-view-count">realistic_view_count</label><br>
 			<input type="checkbox" id="watch-remove-username-space" title="usuwa spacje z nazw użytkowników">
@@ -170,6 +180,8 @@
 			<label for="watch-turn-down-lights">turn_down_lights</label><br>
 			<input type="checkbox" id="watch-username-asciify" title="usuwa znaki specjalne z nazw użytkowników">
 			<label for="watch-username-asciify">username_asciify</label><br>
+			<input type="checkbox" id="watch-watch-modern-features" title="backporty nowych rzeczy na 2009 layout">
+			<label for="watch-watch-modern-features">watch_modern_features</label><br>
 			<input type="checkbox" id="watch-wayback-features" title="użyj zapisów z Wayback Machine na yt2009">
 			<label for="watch-wayback-features">wayback_features</label>
 			<input type="text" id="watch-wayback-features-input" autocomplete="off" spellcheck="false" placeholder="tryb">
@@ -179,6 +191,8 @@
 			- author - nazwa, awatar autora<br>
 			- related - dodaje podobne filmy z zapisu, filtruje nieistniejące<br>
 			- comments - pokaże komentarze z tamtego czasu<br><b>wayback_features nie zadziała na filmach wrzuconych po 2013-01-01.</b></p>
+			<input type="checkbox" id="watch-yt-redir" title="przekierowuj linki youtube w opisach do yt2009">
+			<label for="watch-yt-redir">yt_redir</label>
 		</div>
 		<div class="group2">
 			<h2>/results</h2>
@@ -212,8 +226,14 @@
 			<span id="default-avatar-notice">zobacz default_avatar na /watch dla możliwych wartości</span><br>
 			<input type="checkbox" id="channel-default-color" title="domyślne kolory tła (szare) zamiast brania ich z baneru">
 			<label for="channel-default-color">default_color</label><br>
+			<input type="checkbox" id="channel-disable-old-banners" title="nie pokazuje starych banerów i teł. przyspiesza ładowanie stron.">
+			<label for="channel-disable-old-banners">disable_old_banners</label><br>
 			<input type="checkbox" id="channel-index-contribute" title="kanały które odwiedzisz będą widoczne (anonimowo) dla wszystkich na /channels">
 			<label for="channel-index-contribute">index_contribute</label><br>
+			<input type="checkbox" id="channel-no-community" title="wyłącza kartę Recent Activity, pokazującą nowe posty od kanału">
+			<label for="channel-no-community">no_community</label><br>
+			<input type="checkbox" id="channel-no-live" title="wyłącza kartę Live, pokazującą obecne transmisje na żywo">
+			<label for="channel-no-live">no_live</label><br>
 			<input type="checkbox" id="channel-only-old" title="pokazuje na kanałach tylko filmy wrzucone w zakresie/przed datą (domyślnie 01.04.2010)">
 			<label for="channel-only-old">only_old</label>
 			<input type="text" id="channel-only-old-input" autocomplete="off" spellcheck="false" placeholder="sprawdź moż. wartości">
@@ -253,6 +273,8 @@
 		<div class="group5">
 			<h2>[global]</h2>
 			<h4 id="i_all_pages">te flagi działają na wszystkich podstronach które będą ich używać.</h4>
+			<input type="checkbox" id="global-adaptive-old" title="automatycznie ustawia only_old na obecną datę w przeszłości. wymaga włączonego only_old.">
+			<label for="global-adaptive-old">adaptive_old</label><br>
 			<input type="checkbox" id="global-always-annotations" title="automatycznie włącza adnotacje na filmach">
 			<label for="global-always-annotations">always_annotations</label><br>
 			<input type="checkbox" id="global-always-captions" title="automatycznie włącza napisy na filmach">
@@ -263,6 +285,10 @@
 			<label for="global-author-old-avatar">author_old_avatar</label><br>
 			<input type="checkbox" id="global-autogen-thumbnails" title="używanie automatycznie generowanych miniaturek">
 			<label for="global-autogen-thumbnails">autogen_thumbnails</label><br>
+			<input type="checkbox" id="global-disable-autocc" title="wyłącza automatyczne włączanie automatycznych napisów.">
+			<label for="global-disable-autocc">disable_autocc</label><br>
+			<input type="checkbox" id="global-disable-chapters" title="wyłącza podświetlanie rozdziałów filmu.">
+			<label for="global-disable-chapters">disable_chapters</label><br>
 			<input type="checkbox" id="global-fake-dates" title="podstawione daty komentarzy i opublikowania">
 			<label for="global-fake-dates">fake_dates</label><br>
 			<input type="checkbox" id="global-login-simulate" title="symuluje zalogowanego użytkownika">
@@ -272,12 +298,14 @@
 			<label for="global-new-suggestions">new_suggestions</label><br>
 			<input type="checkbox" id="global-no-controls-fade" title="wyłącza zanikanie kontrolek odtwarzacza">
 			<label for="global-no-controls-fade">no_controls_fade</label><br>
+			<input type="checkbox" id="global-no-doodles" title="wyłącza doodle -- sezonowe loga youtube">
+			<label for="global-no-doodles">no_doodles</label><br>
 			<input type="checkbox" id="global-shows-tab" title="pokazuje zakładkę Shows pod wyszukiwarką (nic nie robi, pod pokaz)">
 			<label for="global-shows-tab">shows_tab</label><br>
 			<input type="checkbox" id="global-thumbnail-proxy" title="miniaturki będą przechodzić przez yt2009, naprawiając je w sieciach które blokują youtube.">
 			<label for="global-thumbnail-proxy">thumbnail_proxy</label>
 		</div>
-		<a class="yt-button yt-button-primary" href="#" onclick="update_cookies();"><span id="i_save">zapisz</span></a>
+		<a class="yt-button yt-button-primary" href="#" onclick="update_cookies();"><span id="i_save">zapisz</span></a><br>
 
 
 		<!-- end bottom section -->
@@ -540,6 +568,7 @@
 					"favorites", "filtered", "lastNotif", "playlistsIndex",
 					"quicklistVids", "subscriptions", "watch_history"
 				]
+				v = saveVars[v]
 				for(var v in saveVars) {
 					if(localStorage[v]) {
 						compiledData += "/l:" + v + ":" + separatorChar + localStorage[v] + separatorChar;
@@ -610,13 +639,16 @@
 			// cookies
 			var cookies = d.split("c:" + lsep)[1].split(lsep)[0].split("; ");
 			for(var c in cookies) {
-				c = cookies[c]
-				if(typeof(c) == "string" && c.indexOf("=") !== -1) {
-					var name = c.split("=")[0]
-					var value = c.split("=")[1]
-					document.cookie = name + "=" + value + "; Path=/; expires=Fri, 31 Dec 2066 23:59:59 GMT"
-					cookiesChanged++
+				try {
+					c = cookies[c]
+					if(c && typeof(c) == "string" && c.indexOf("=") !== -1) {
+						var name = c.split("=")[0]
+						var value = c.split("=")[1]
+						document.cookie = name + "=" + value + "; Path=/; expires=Fri, 31 Dec 2066 23:59:59 GMT"
+						cookiesChanged++
+					}
 				}
+				catch(error){}
 			}
 			importMsg += cookiesChanged + " cookies affected"
 
@@ -625,13 +657,18 @@
 			if(d.indexOf("/l:") !== -1 && window.localStorage) {
 				var e = d.split("/l:")
 				for(var f in e) {
-					f = e[f]
-					if(typeof(f) == "string" && f.indexOf(":" + lsep) !== -1) {
-						var name = f.split(":" + lsep)[0]
-						var value = f.split(":" + lsep)[1].split(lsep)[0]
-						localStorage[name] = value;
-						localChanged++
+					try {
+						f = e[f]
+						if(f
+						&& typeof(f) == "string"
+						&& f.indexOf(":" + lsep) !== -1) {
+							var name = f.split(":" + lsep)[0]
+							var value = f.split(":" + lsep)[1].split(lsep)[0]
+							localStorage[name] = value;
+							localChanged++
+						}
 					}
+					catch(error){}
 				}
 			}
 			if(localChanged > 0) {

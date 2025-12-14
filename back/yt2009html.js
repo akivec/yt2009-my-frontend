@@ -1,6 +1,5 @@
 const fs = require("fs");
 const fetch = require("node-fetch");
-const ytdl = require("ytdl-core")
 const child_process = require("child_process");
 
 const yt2009utils = require("./yt2009utils")
@@ -12,12 +11,18 @@ const yt2009waybackwatch = require("./cache_dir/wayback_watchpage")
 const yt2009templates = require("./yt2009templates");
 const yt2009languages = require("./language_data/language_engine")
 const yt2009exports = require("./yt2009exports")
-const yt2009tvsignin = require("./yt2009tvsignin")
+const yt2009signin = require("./yt2009androidsignin")
+const yt2009trusted = require("./yt2009trustedcontext")
+const yt2009mobilehelper = require("./yt2009mobilehelper")
+const yt2009sabr = require("./yt2009sabr")
 const constants = require("./yt2009constants.json")
 const config = require("./config.json")
 const userid = require("./cache_dir/userid_cache")
+const playerProto = require("./proto/android_player_pb")
 const crypto = require("crypto")
 const signedInNext = false;
+const devTimings = false;
+const oneWeek = 1000 * 60 * 60 * 24 * 7
 
 const watchpage_code = fs.readFileSync("../watch.html").toString();
 const watchpage_feather = fs.readFileSync("../watch_feather.html").toString()
@@ -57,24 +62,99 @@ let oldCommentsWrite = setInterval(function() {
         JSON.stringify(oldCommentsCache)
     )
 }, 1000 * 60 * 60)
+let sups = []
 
 module.exports = {
-    "innertube_get_data": function(id, callback) {
+    "innertube_get_data": function(id, callback, pullChannelEarly) {
+        let useAndroidPlayer = true;
+
+        let timer = 0;
+        let timingInterval;
+        if(devTimings) {
+            timingInterval = setInterval(() => {
+                timer += 0.1
+                if(timer >= 2) {
+                    clearInterval(timingInterval)
+                }
+            }, 100)
+        }
+        function stopTimer() {
+            if(devTimings) {
+                clearInterval(timingInterval)
+            }
+        }
+
         if(JSON.stringify(innertube_context) == "{}") {
             innertube_context = constants.cached_innertube_context
             api_key = this.get_api_key()
         }
 
         let rHeaders = JSON.parse(JSON.stringify(constants.headers))
-        if(yt2009tvsignin.needed() && yt2009tvsignin.getTvData().accessToken) {
-            let tv = yt2009tvsignin.getTvData()
-            rHeaders.Authorization = `${tv.tokenType} ${tv.accessToken}`
+        if(yt2009signin.needed() && yt2009signin.getData().yAuth) {
+            let d = yt2009signin.getData().yAuth
+            rHeaders.Authorization = `Bearer ${d}`
         }
 
         let callbacksRequired = 2;
+        if(config.data_api_key && useAndroidPlayer) {
+            callbacksRequired++
+            // some category ids match 2009 ids but not all
+            const dataApiCategoryIds = {
+                1: "Film & Animation",
+                2: "Autos & Vehicles",
+                10: "Music",
+                15: "Pets & Animals",
+                17: "Sports",
+                18: "Short Movies",
+                19: "Travel & Events",
+                20: "Gaming",
+                21: "Videoblogging",
+                22: "People & Blogs",
+                23: "Comedy",
+                24: "Entertainment",
+                25: "News & Politics",
+                26: "Howto & Style",
+                27: "Education",
+                28: "Science & Technology",
+                29: "Nonprofits & Activism",
+                30: "Movies",
+                34: "Comedy"
+            }
+            let url = [
+                `https://www.googleapis.com/youtube/v3/videos?part=snippet`,
+                `&id=${id}&key=${config.data_api_key}`
+            ].join("")
+            fetch(url, {
+                "headers": constants.headers,
+                "method": "GET"
+            }).then(r => {try {r.json().then(r => {
+                if(!r.error && r.items && r.items[0]
+                && r.items[0].snippet.categoryId) {
+                    let s = r.items[0].snippet
+                    let c = s.categoryId
+                    combinedResponse.category = dataApiCategoryIds[c]
+                                              || "People & Blogs";
+                    if(s.publishedAt) {
+                        combinedResponse.publishDate = s.publishedAt
+                    }
+                }
+                callbacksMade++
+                if(callbacksMade == callbacksRequired) {
+                    callback(combinedResponse)
+                    stopTimer()
+                }
+            })}catch(error){
+                console.log(error)
+                callbacksMade++
+                if(callbacksMade == callbacksRequired) {
+                    callback(combinedResponse)
+                    stopTimer()
+                }
+            }})
+        }
         let callbacksMade = 0;
         let combinedResponse = {}
-        fetch(`https://www.youtube.com/youtubei/v1/next?key=${api_key}`, {
+        fetch(`https://www.youtube.com/youtubei/v1/next?prettyPrint=false`, {
             "headers": signedInNext ? rHeaders : constants.headers,
             "referrer": `https://www.youtube.com/`,
             "referrerPolicy": "strict-origin-when-cross-origin",
@@ -90,40 +170,98 @@ module.exports = {
             "method": "POST",
             "mode": "cors"
         }).then(r => {r.json().then(r => {
+            if(devTimings) {
+                console.log("/next received", timer)
+            }
             for(let i in r) {
                 combinedResponse[i] = r[i]
             }
             callbacksMade++
             if(callbacksMade == callbacksRequired) {
                 callback(combinedResponse)
+                stopTimer()
             }
         })})
 
-        fetch(`https://www.youtube.com/youtubei/v1/player?key=${api_key}`, {
+        let playerContext = JSON.parse(JSON.stringify(innertube_context))
+        if(useAndroidPlayer) {
+            playerContext = {
+                "client": {
+                    "hl": "en",
+                    "clientName": "ANDROID",
+                    "clientVersion": "19.02.39",
+                    "deviceMake": "Google",
+                    "deviceModel": "Android SDK built for x86",
+                    "deviceCodename": "ranchu;",
+                    "osName": "Android",
+                    "osVersion": "10",
+                    "mainAppWebInfo": {
+                        "graftUrl": "/watch?v=" + id
+                    }
+                }
+            }
+        }
+        rHeaders["user-agent"] = "com.google.android.youtube/19.02.39 (Linux; U; Android 14) gzip"
+        fetch(`https://www.youtube.com/youtubei/v1/player?prettyPrint=false`, {
             "headers": rHeaders,
             "referrer": `https://www.youtube.com/`,
             "referrerPolicy": "strict-origin-when-cross-origin",
             "body": JSON.stringify({
-                "contentCheckOk": true,
-                "context": innertube_context,
+                "context": playerContext,
                 "playbackContext": {"vis": 0, "lactMilliseconds": "1"},
+                "videoId": id,
                 "racyCheckOk": true,
-                "videoId": id
+                "contentCheckOk": true
             }),
             "method": "POST",
             "mode": "cors"
         }).then(r => {r.json().then(r => {
+            if(devTimings) {
+                console.log("/player received", timer)
+            }
+            if(useAndroidPlayer) {
+                if(r.streamingData) {
+                    yt2009exports.extendWrite("players", id, r)
+                }
+                setTimeout(() => {
+                    // delete cached player after 15 minutes if still there
+                    if(yt2009exports.read().players[id]) {
+                        yt2009exports.delete("players", id)
+                    }
+                }, 1000 * 60 * 15)
+                combinedResponse.freezeSync = true;
+                // ^ overriden when category pull done successfully
+            }
+            if(r.videoDetails
+            && r.videoDetails.channelId
+            && pullChannelEarly) {
+                const yt2009channels = require("./yt2009channels")
+                yt2009channels.main({
+                    "path": "/channel/" + r.videoDetails.channelId,
+                    "headers": {"cookie": ""},
+                    "query": {"f": 0, "earlyPull": true}
+                }, 
+                {"send": function(data) {
+                    if(devTimings) {
+                        console.log("early channel fetch success", timer)
+                    }
+                }}, "", true)
+            }
             for(let i in r) {
                 combinedResponse[i] = r[i]
             }
             callbacksMade++
             if(callbacksMade == callbacksRequired) {
                 callback(combinedResponse)
+                stopTimer()
             }
         })})
     },
 
-    "fetch_video_data": function(id, callback, userAgent, userToken, useFlash, resetCache, disableDownload) {
+    "fetch_video_data": function(
+        id, callback, userAgent, userToken, useFlash,
+        resetCache, disableDownload, pullChannelEarly
+    ) {
         let waitForOgv = false;
 
         // if firefox<=25 wait for ogg, otherwise callback mp4
@@ -140,7 +278,9 @@ module.exports = {
                 console.log(`(${userToken}) ${id} z cache (${Date.now()})`)
             }
 
-            if(!fs.existsSync(`../assets/${id}.mp4`) && !disableDownload) {
+            if(!fs.existsSync(`../assets/${id}.mp4`)
+            && !disableDownload
+            && !v.live) {
                 yt2009utils.saveMp4(id, (path => {}))
                 callback(v)
             } else {
@@ -171,10 +311,27 @@ module.exports = {
             if(config.env == "dev") {
                 console.log(`(${userToken}) ${id} clean fetch ${Date.now()} ${resetCache ? "(cache reset)" : ""}`)
             }
-            this.innertube_get_data(id, (videoData => {
-                let fetchesCompleted = 0;
 
-                let data = {}
+            let fetchesCompleted = 0;
+            let fetchesRequired = 3;
+
+            let data = {}
+
+            let time = 0;
+            let x;
+            if(devTimings) {
+                x = setInterval(function() {
+                    time += 0.1
+                    if(time >= 2) {
+                        clearInterval(x)
+                    }
+                }, 100)
+            }
+
+            this.innertube_get_data(id, (videoData => {
+                if(devTimings) {
+                    console.log("innertube pulls", time)
+                }
                 try {
                     data.title = videoData.videoDetails.title
                 }
@@ -187,7 +344,15 @@ module.exports = {
                             displayError = videoData.playabilityStatus
                                            .errorScreen
                                            .playerErrorMessageRenderer
-                                           .subreason.simpleText
+                            if(displayError.subreason) {
+                                displayError = displayError.subreason
+                                                           .simpleText;
+                            } else if(videoData.playabilityStatus.reason) {
+                                displayError = videoData.playabilityStatus
+                                                        .reason
+                            } else {
+                                displayError = defaultError
+                            }
                         }
                         catch(error) {}
                     }
@@ -197,10 +362,16 @@ module.exports = {
                     return;
                 }
 
-                if(videoData.videoDetails.isLive) {
+                let isLive = videoData.videoDetails.isLive
+                data.live = isLive
+                // don't cache if live playback as it could end
+                if(data.live) {
+                    data.freezeCache = true;
+                }
+                /*if(videoData.videoDetails.isLive) {
                     callback(false)
                     return;
-                }
+                }*/
 
                 // basic data
                 data.description = videoData.videoDetails.shortDescription
@@ -246,29 +417,124 @@ module.exports = {
                 // more basic data
                 data.author_img = ""
                 try {
-                    data.author_img = videoData.contents
-                                      .twoColumnWatchNextResults
-                                      .results.results.contents[1]
-                                      .videoSecondaryInfoRenderer
-                                      .owner.videoOwnerRenderer
-                                      .thumbnail.thumbnails[1].url
+                    let secondary = videoData.contents.twoColumnWatchNextResults
+                                             .results.results.contents;
+                    secondary = secondary.filter(s => {
+                        return s.videoSecondaryInfoRenderer
+                    })[0]
+                    if(secondary) {
+                        // has a renderer to try and get an avatar from
+                        let owner = secondary.videoSecondaryInfoRenderer.owner
+                                             .videoOwnerRenderer
+                        if(owner.thumbnail) {
+                            // normal avatar
+                            data.author_img = owner.thumbnail
+                                                   .thumbnails[1].url;
+                            data.author_img = yt2009utils.saveAvatar(
+                                data.author_img
+                            )
+                        } else if(owner.avatarStack
+                        && owner.avatarStack.avatarStackViewModel
+                        && owner.avatarStack.avatarStackViewModel.avatars) {
+                            // avatarStack comes up instead of thumbnail
+                            // if multiple creators are "authors" of the video
+                            // example: http://youtu.be/Ut41eePtfBk
+                            try { 
+                                let f = owner.avatarStack.avatarStackViewModel
+                                             .avatars[0]
+                                data.author_img = f.avatarViewModel.image
+                                                    .sources[0].url
+                            }
+                            catch(error) {
+                                console.log(error)
+                                data.author_img = "default"
+                            }
+                        } else {
+                            // otherwise put a default avatar
+                            data.author_img = "default"
+                        }
+                    } else {
+                        data.author_img = "default"
+                    }
+                    
                 }
                 catch(error) {
                     data.author_img = "default"
                 }
-                data.upload = videoData.microformat
-                              .playerMicroformatRenderer.uploadDate
+                if(videoData.microformat
+                && videoData.microformat.playerMicroformatRenderer
+                && videoData.microformat.playerMicroformatRenderer.uploadDate) {
+                    data.upload = videoData.microformat.playerMicroformatRenderer
+                                           .uploadDate
+                    data.confirmedTrueUpload = true;
+                    // freezecache if less than a week old
+                    // to allow flow of new comments and interactions
+                    let dUnix = new Date(data.upload).getTime()
+                    if(Date.now() - oneWeek < dUnix) {
+                        data.freezeCache = true;
+                    }
+                } else if(videoData.publishDate) {
+                    data.upload = videoData.publishDate
+                    data.confirmedTrueUpload = true;
+                    // freezecache same as ^^
+                    let dUnix = new Date(data.upload).getTime()
+                    if(Date.now() - oneWeek < dUnix) {
+                        data.freezeCache = true;
+                    }
+                } else {
+                    try {
+                        let contents = videoData.contents.twoColumnWatchNextResults
+                                       .results.results.contents
+                                       .filter(s => {
+                                           return s.videoPrimaryInfoRenderer
+                                       })[0]
+                        data.upload = contents.videoPrimaryInfoRenderer
+                                      .dateText.simpleText
+                        if(data.upload.includes(" on ")) {
+                            data.upload = data.upload.split(" on ")[1]
+                        }
+                        if(data.upload.includes(" ago")) {
+                            // relative date (streams etc)
+                            data.upload = yt2009utils.relativeToAbsoluteApprox(
+                                data.upload
+                            )
+                        }
+                    }
+                    catch(error) {
+                        data.upload = new Date().toISOString()
+                    }
+                }
                 data.tags = videoData.videoDetails.keywords || [];
                 data.related = []
-                data.length = parseInt(videoData.microformat
-                                       .playerMicroformatRenderer
-                                       .lengthSeconds)
-                data.category = videoData.microformat
-                                .playerMicroformatRenderer.category
+                data.length = parseInt(videoData.videoDetails.lengthSeconds)
+                if(videoData.microformat) {
+                    try {
+                        data.category = videoData.microformat
+                                        .playerMicroformatRenderer.category
+                    }
+                    catch(error) {
+                        data.category = "People & Blogs"
+                    }
+                } else if(videoData.category) {
+                    data.category = videoData.category;
+                } else {
+                    data.category = "People & Blogs"
+                }
                 
                 if(videoData.playabilityStatus
                 && videoData.playabilityStatus.status == "LOGIN_REQUIRED") {
                     data.restricted = true
+                }
+
+                if(videoData.freezeSync && !videoData.category) {
+                    data.freezeSync = true;
+                }
+
+                // unplayable check (country restriction/members only)
+                // still gets data
+                if(videoData.playabilityStatus
+                && videoData.playabilityStatus.status == "UNPLAYABLE") {
+                    data.unplayable = true;
                 }
 
                 // "related" videos
@@ -294,7 +560,99 @@ module.exports = {
                 && related[1].itemSectionRenderer.contents) {
                     related = related[1].itemSectionRenderer.contents
                 }
+                let viewmodelViewCountFails = []
                 related.forEach(video => {
+                    if(video.lockupViewModel
+                    && video.lockupViewModel.contentType == "LOCKUP_CONTENT_TYPE_VIDEO") {
+                        // viewmodel related videos
+                        video = video.lockupViewModel;
+                        let metadata = video.metadata.lockupMetadataViewModel;
+                        let id = video.contentId
+                        let title = metadata.title.content
+                        let creatorUrl = "UC" + JSON.stringify(video)
+                                                .split(`browseId":"UC`)[1]
+                                                .split(`"`)[0];
+                        let creatorHandle = null;
+                        try {
+                            let tc = JSON.stringify(video)
+                                     .split(`canonicalBaseUrl":"/@`)[1]
+                                     .split(`"`)[0];
+                            if(tc) {
+                                creatorHandle = tc;
+                            }
+                        }
+                        catch(error) {}
+                        let metadataParts = []
+                        let mrPath = metadata.metadata.contentMetadataViewModel
+                                             .metadataRows;
+                        mrPath.forEach(r => {
+                            if(r.metadataParts) {r.metadataParts.forEach(p => {
+                                try {metadataParts.push(p.text.content)}
+                                catch(error){}
+                            })}
+                        })
+                        let viewCount = metadataParts.filter(s => {
+                            return s.includes(" views")
+                        })[0]
+                        if(viewCount) {
+                            viewCount = yt2009utils.approxSubcount(
+                                viewCount.split(" ")[0]
+                            ) + " views"
+                        } else {
+                            viewCount = "0 views"
+                        }
+                        try {
+                            let tvc = video.rendererContext
+                                      .accessibilityContext.label
+                                      .split(" views");
+                            tvc = tvc[viewCount.length - 2].split(" ");
+                            tvc = tvc[viewCount.length - 1] + " views"
+
+                            // full viewcount in accessibility data, use that
+                            if(tvc && !isNaN(parseInt(tvc.split(" ")[0]))) {
+                                viewCount = tvc;
+                            }
+                        }
+                        catch(error){
+                            viewmodelViewCountFails.push(id)
+                            let bvc = viewCount.split(" ")[0]
+                            let count = yt2009utils.countBreakup(bvc)
+                            if(bvc.includes("No")) {
+                                count = "0"
+                            }
+                            viewCount = count + " views"
+                        }
+                        let creatorName = metadataParts[0]
+                        let upload = metadataParts[2]
+                        let time = "1:00"
+                        try {
+                            video.contentImage.thumbnailViewModel
+                            .overlays.forEach(o => {
+                                if(o.thumbnailOverlayBadgeViewModel) {
+                                    time = o.thumbnailOverlayBadgeViewModel
+                                            .thumbnailBadges[0]
+                                            .thumbnailBadgeViewModel
+                                            .text;
+                                }
+                            })
+                        }
+                        catch(error){}
+                        if(!time
+                        || time.toLowerCase().includes("live")
+                        || time.toLowerCase().includes("short")
+                        || time.toLowerCase().includes("premier")) return;
+                        data.related.push({
+                            "id": id,
+                            "title": title,
+                            "views": viewCount,
+                            "length": time,
+                            "creatorName": creatorName,
+                            "creatorUrl": "/channel/" + creatorUrl,
+                            "creatorHandle": creatorHandle,
+                            "uploaded": upload
+                        })
+                        return;
+                    }
                     if(!video.compactVideoRenderer && !video.richItemRenderer) return;
 
                     let gridResult = false;
@@ -318,12 +676,30 @@ module.exports = {
                                         .browseEndpoint.canonicalBaseUrl
                     })
 
+                    let creatorHandle = null;
+                    if(creatorUrl.startsWith("/@")) {
+                        creatorHandle = creatorUrl.split("/@")[1]
+                    }
+
                     if(!creatorUrl.startsWith("/c/")
                     && !creatorUrl.startsWith("/user/")
                     && !creatorUrl.startsWith("/channel/")) {
                         creatorUrl = "/channel/" + video.shortBylineText.runs[0]
                                                     .navigationEndpoint
                                                     .browseEndpoint.browseId
+                    }
+
+                    if(!video.lengthText
+                    || !video.lengthText.simpleText
+                    || video.lengthText.simpleText.toLowerCase()
+                            .includes("live")
+                    || video.lengthText.simpleText.toLowerCase()
+                            .includes("short")
+                    || video.lengthText.simpleText.toLowerCase()
+                            .includes("premier")) return;
+                    if(video.viewCountText && video.viewCountText.simpleText
+                    && video.viewCountText.simpleText.includes("No ")) {
+                        video.viewCountText.simpleText = "0 views"
                     }
                     try {
                         data.related.push({
@@ -333,6 +709,7 @@ module.exports = {
                             "length": video.lengthText.simpleText,
                             "creatorName": creatorName,
                             "creatorUrl": creatorUrl,
+                            "creatorHandle": creatorHandle,
                             "uploaded": video.publishedTimeText.simpleText
                         })
                     }
@@ -340,6 +717,61 @@ module.exports = {
                         
                     }
                 })
+                if(viewmodelViewCountFails.length >= 1 && config.data_api_key) {
+                    fetchesRequired++
+                    // fallback fetch full viewcount through data api
+                    if(config.env == "dev") {
+                        console.log(
+                            "viewmodel related lack full viewcounts",
+                            "// data api fetch!!"
+                        )
+                    }
+                    let dataApiUrl = [
+                        "https://www.googleapis.com/youtube/v3/videos",
+                        "?part=statistics,snippet&id=" + viewmodelViewCountFails.join(),
+                        "&key=" + config.data_api_key
+                    ].join("")
+                    fetch(dataApiUrl, {
+                        "headers": constants.headers,
+                        "method": "GET"
+                    }).then(r => {try {r.json().then(r => {
+                        if(!r.error && r.items) {
+                            r.items.forEach(v => {
+                                let rel = data.related.filter(s => {
+                                    return s.id == v.id
+                                })[0]
+                                let i = data.related.indexOf(rel)
+                                if(i !== null && i !== undefined && i >= 0
+                                && v.statistics && v.statistics.viewCount) {
+                                    let vc = parseInt(v.statistics.viewCount)
+                                    vc = yt2009utils.countBreakup(vc)
+                                    vc += " views"
+                                    data.related[i].views = vc;
+                                }
+                                if(i !== null && i !== undefined && i >= 0
+                                && v.snippet && v.snippet.title) {
+                                    data.related[i].title = v.snippet.title
+                                }
+                            })
+                        }
+                        fetchesCompleted++;
+                        if(devTimings) {
+                            console.log("data api related fetch", time)
+                        }
+                        if(fetchesCompleted >= fetchesRequired) {
+                            callback(data)
+                        }
+                    })}catch(error){
+                        console.log(error)
+                        if(devTimings) {
+                            console.log("data api related fetch", time)
+                        }
+                        fetchesCompleted++;
+                        if(fetchesCompleted >= fetchesRequired) {
+                            callback(data)
+                        }
+                    }})
+                }
 
                 // save channel image
 
@@ -350,56 +782,101 @@ module.exports = {
                     data.author_img = yt2009utils.saveAvatar(data.author_img, false)
                 }
                 fetchesCompleted++;
-                if(fetchesCompleted >= 3) {
+                if(devTimings) {
+                    console.log("avatar", time)
+                }
+                if(fetchesCompleted >= fetchesRequired) {
                     callback(data)
                 }
-            
-
-                // fetch comments
-                const pb = require("./proto/cmts_pb")
-                let commentRequest = new pb.comments()
-
-                let videoMsg = new pb.comments.video()
-                videoMsg.setVideoid(id)
-                commentRequest.addVideomsg(videoMsg)
-
-                commentRequest.setType(6)
-
-                let commentsReqParamsMain = new pb.comments.commentsReq()
-                commentsReqParamsMain.setSectiontype("comments-section")
-                let crpChild = new pb.comments.commentsReq.commentsData()
-                crpChild.setVideoid(id)
-                commentsReqParamsMain.addCommentsdatareq(crpChild)
-                commentRequest.addCommentsreqmsg(commentsReqParamsMain)
-
-                let token = encodeURIComponent(Buffer.from(
-                    commentRequest.serializeBinary()
-                ).toString("base64"))
-                
-                this.request_continuation(token, id, "",
-                    (comment_data) => {
-                        data.comments = comment_data
-                        fetchesCompleted++;
-                        if(fetchesCompleted >= 3) {
-                            callback(data)
-                        }
-                    }
-                )
 
                 // qualities
                 data.qualities = []
+
+                if(yt2009utils.isUnsupportedNode()
+                && videoData.streamingData
+                && videoData.streamingData.adaptiveFormats) {
+                    // unsupported node can't load adaptiveFormats
+                    // so don't even try
+                    videoData.streamingData.adaptiveFormats = []
+                }
+
                 if(!videoData.streamingData) {
                     videoData.streamingData = {}
                 }
                 if(!videoData.streamingData.adaptiveFormats) {
-                    videoData.streamingData.adaptiveFormats = [{"qualityLabel": "360p"}]
+                    videoData.streamingData.adaptiveFormats = [
+                        {"qualityLabel": "360p", "url": "dummy"}
+                    ]
                 }
+                data.extendedItagData = []
                 videoData.streamingData.adaptiveFormats.forEach(quality => {
-                    if(quality.qualityLabel
-                    && !data.qualities.includes(quality.qualityLabel)) {
-                        data.qualities.push(quality.qualityLabel)
+                    if(quality.qualityLabel) {
+                        let xtags = false;
+						if(quality.xtags) {
+                            try {
+                                xtags = playerProto.xtags.deserializeBinary(
+                                    quality.xtags
+                                ).toObject()
+                            }
+                            catch(error){}
+                        }
+                        if(!config.max_1080
+                        || (config.max_1080 && quality.height <= 1080)) {
+                            data.extendedItagData.push([
+                                quality.itag,quality.qualityLabel,quality.height,
+                                quality.xtags,quality.mimeType,xtags
+                            ])
+                        }
                     }
+                    if(quality.qualityLabel) {
+                        quality.qualityLabel = quality.qualityLabel
+                                               .replace("p50", "p")
+                                               .replace("p60", "p");
+                    }
+                    if(quality.qualityLabel
+                    && !data.qualities.includes(quality.qualityLabel)
+                    && quality.url
+                    && quality.mimeType
+                    && quality.mimeType.includes("avc")) {
+                        data.qualities.push(quality.qualityLabel)
+                    } else if(quality.qualityLabel
+					&& !data.qualities.includes(quality.qualityLabel)
+					&& quality.xtags) {
+						let xtags = false;
+						try {
+							xtags = playerProto.xtags.deserializeBinary(
+								quality.xtags
+							).toObject()
+						}
+						catch(error){}
+						let isSr = false;
+						if(xtags && xtags.partList) {
+							xtags.partList.forEach(p => {
+								if(p.key == "sr" && p.value == "1") {
+									isSr = true;
+								}
+							})
+						}
+						if(isSr) {
+							if(!data.superResolutions) {
+								data.superResolutions = []
+							}
+							data.superResolutions.push([
+								quality.qualityLabel,
+								quality.itag,
+								quality.mimeType
+							])
+						}
+					}
                 })
+
+
+                // disabled comments
+                if(JSON.stringify(videoData).includes(
+                    "/answer/9706180"
+                )) {
+                    data.commentsDisabled = true;
+                }
                 
                 // save mp4/ogv
 
@@ -411,7 +888,7 @@ module.exports = {
                                 (error, stdout, stderr) => {
                                     data.mp4 = `/assets/${id}`
                                     fetchesCompleted++;
-                                    if(fetchesCompleted >= 3) {
+                                    if(fetchesCompleted >= fetchesRequired) {
                                         callback(data)
                                     }  
                                 }
@@ -423,19 +900,21 @@ module.exports = {
                                 data.mp4 = `/assets/${id}`
                             }
                             fetchesCompleted++;
-                            if(fetchesCompleted >= 3) {
+                            if(fetchesCompleted >= fetchesRequired) {
                                 callback(data)
                             }
-                            cache.write(id, data)
+                            if(!data.freezeCache) {
+                                cache.write(id, data)
+                            }
                         }
                     }
 
                     // ytdl
                     if(!waitForOgv) {
                         data.pMp4 = "/get_video?video_id=" + id + "/mp4"
-                        yt2009utils.saveMp4(id, (path => {}))
+                        if(!isLive) {yt2009utils.saveMp4(id, (path => {}))}
                         on_mp4_save_finish(`../assets/${id}`)
-                    } else {
+                    } else if(!isLive) {
                         yt2009utils.saveMp4(id, (path => {
                             on_mp4_save_finish(path)
                         }))
@@ -445,12 +924,48 @@ module.exports = {
                 } else {
                     data.mp4 = `/assets/${id}`
                     fetchesCompleted++;
-                    if(fetchesCompleted >= 3) {
+                    if(fetchesCompleted >= fetchesRequired) {
                         callback(data)
                     }
-                    cache.write(id, data);
+                    if(!data.freezeCache) {
+                        cache.write(id, data);
+                    }
                 }
-            }))
+            }), pullChannelEarly)
+
+            // fetch comments
+            const pb = require("./proto/cmts_pb")
+            let commentRequest = new pb.comments()
+
+            let videoMsg = new pb.comments.video()
+            videoMsg.setVideoid(id)
+            commentRequest.addVideomsg(videoMsg)
+
+            commentRequest.setType(6)
+
+            let commentsReqParamsMain = new pb.comments.commentsReq()
+            commentsReqParamsMain.setSectiontype("comments-section")
+            let crpChild = new pb.comments.commentsReq.commentsData()
+            crpChild.setVideoid(id)
+            commentsReqParamsMain.addCommentsdatareq(crpChild)
+            commentRequest.addCommentsreqmsg(commentsReqParamsMain)
+
+            let token = encodeURIComponent(Buffer.from(
+                commentRequest.serializeBinary()
+            ).toString("base64"))
+            
+            this.request_continuation(token, id, "",
+                (comment_data) => {
+                    data.comments = comment_data
+                    fetchesCompleted++;
+                    if(devTimings) {
+                        console.log("comments pull", time)
+                    }
+                    if(fetchesCompleted >= fetchesRequired) {
+                        callback(data)
+                    }
+                }, true
+            )
         }
     },
 
@@ -465,9 +980,20 @@ module.exports = {
         let commentId = this.commentId
         let hasComment = this.hasComment
 
+        let time = 0;
+        let x;
+        if(devTimings) {
+            x = setInterval(function() {
+                time += 0.1
+                if(time >= 3) {
+                    clearInterval(x)
+                }
+            }, 100)
+        }
+
         // basic data
         // flags
-        flags = ""
+        let flags = ""
         try {
             if(req.query.flags) {
                 flags += decodeURIComponent(req.query.flags)
@@ -485,13 +1011,6 @@ module.exports = {
         && req.headers.cookie.includes("safety_mode=true")) {
             callback("safetymode")
             return;
-        }
-
-        // modern qualitylist
-        if(data.qualities) {
-            qualityList = data.qualities;
-        } else {
-            qualityList = []
         }
 
         // playlist
@@ -516,11 +1035,68 @@ module.exports = {
             useFlash = true;
         }
 
+        // sabr
+        let useSabr = false;
+        let sabrBaseUrl = ""
+        if(flags.includes("exp_sabr")
+		&& !(req.query&&req.query.unsabr=="1")) {
+            useSabr = true;
+            sabrBaseUrl = yt2009sabr.initPlaybackSession(data.id, data.qualities)
+        }
+
+        // disable playback mode picker on unsupported node hosts
+        if(yt2009utils.isUnsupportedNode()) {
+            code = code.replace(
+                `//yt2009-unsupport`,
+                `var sabrHostUnsupported = true;`
+            )
+        }
+
+        // put tags whereeever needed in html5 for custom params
+        let html5PlayerTags = [
+            "yt:crop=16:9",
+            "yt:stretch=4:3",
+            "yt:stretch=16:9",
+            "yt:bgcolor=#",
+            "yt:cc=on",
+            "yt:quality=high"
+        ]
+        let playerModifyingTags = data.tags.filter(s => {
+            return (html5PlayerTags.includes(s) && !s.includes("\"")
+                 || s.startsWith("yt:bgcolor="))
+        })
+        if(playerModifyingTags.length >= 1 && !useFlash) {
+            let modifiersCode = playerModifyingTags.join(",")
+            code = code.replace(
+                `//yt2009-html5-modifiers`,
+                `try{window.initModifiers("${modifiersCode}")}catch(error){}`
+            )
+        }
+
         // useragent
         let userAgent = req.headers["user-agent"]
 
         // quality list
         let showHQ = false;
+		
+		if(data.superResolutions
+		&& data.superResolutions.length >= 1
+		&& useSabr
+		&& flags.includes("exp_sabr_enable_superresolution")) {
+			data = JSON.parse(JSON.stringify(data)) //detach data
+			data.superResolutions.forEach(sr => {
+				if(!data.qualities.includes(sr[0])) {
+					data.qualities.push(sr[0])
+				}
+			})
+		}
+		
+		// modern qualitylist
+        if(data.qualities) {
+            qualityList = data.qualities;
+        } else {
+            qualityList = []
+        }
 
         if(isFeather && !useFlash) {
             code = watchpage_feather;
@@ -533,6 +1109,39 @@ module.exports = {
         }
 
         code = require("./yt2009loginsimulate")(flags, code, true)
+
+        // chapter time marks
+        let chapters = []
+        let chapterLabels = []
+        let disableChapters = false;
+        if(req.headers.cookie
+        && req.headers.cookie.includes("disable_chapters")) {
+            disableChapters = true;
+        }
+        data.description.split("\n").forEach(line => {
+            let timestamps = line.split(" ").filter(s => {
+                return s.includes(":")
+                    && !isNaN(parseInt(s.split(":")[0]))
+                    && !isNaN(parseInt(s.split(":")[1]))
+                    && s.split(":")[0] == s.split(":")[0].replace(/[^0-9\,]/g, "")
+                    && s.split(":")[1] == s.split(":")[1].replace(/[^0-9\,]/g, "")
+                    && (line.trim().startsWith(s) || line.trim().endsWith(s))
+            })
+            if(timestamps.length >= 1) {
+                timestamps.forEach(t => {
+                    chapters.push(yt2009utils.time_to_seconds(t))
+                    chapterLabels.push(line.split("\"").join("&quot;"))
+                })
+            }
+        })
+        if(chapters.length >= 1 && !useFlash && !disableChapters) {
+            let timestamps = JSON.stringify(chapters)
+            let labels = JSON.stringify(chapterLabels)
+            code = code.replace(
+                `//yt2009-html5-chapters`,
+                `initChapterMarks(${timestamps},${data.length},${labels})`
+            )
+        }
 
         // handling flag
         
@@ -557,11 +1166,16 @@ module.exports = {
 
         // auto hd
         let autoHQ = false;
-        if(req.headers.cookie
-        && req.headers.cookie.includes("playback_quality=2")) {
+        if((req.headers.cookie
+        && req.headers.cookie.includes("playback_quality=2"))
+        || (req.query.fmt
+        && (req.query.fmt == "18" || req.query.fmt == "22"))) {
             let startQuality = false;
             if(data.qualities.includes("480p")) {
                 autoHQ = "/get_480?video_id=" + data.id
+                autoHQ += yt2009trusted.urlContext(
+                    data.id, "PLAYBACK_HQ", (data.length >= 60 * 30)
+                )
                 if(!data.qualities.includes("720p")) {
                     code = code.replace(
                         `<!--yt2009_hq_btn-->`,
@@ -572,6 +1186,9 @@ module.exports = {
             }
             if(data.qualities.includes("720p")) {
                 autoHQ = "/exp_hd?video_id=" + data.id
+                autoHQ += yt2009trusted.urlContext(
+                    data.id, "PLAYBACK_HD", (data.length >= 60 * 30)
+                )
                 code = code.replace(
                     `<!--yt2009_hq_btn-->`,
                     `<span class="hq hd enabled"></span>`
@@ -585,9 +1202,25 @@ module.exports = {
             }
 
             // start saving in advance for quicker video load for end user
-            if(startQuality) {
+            if(startQuality && !data.live && !useSabr) {
                 yt2009utils.saveMp4_android(data.id, () => {}, false, startQuality)
             }
+        }
+
+        // unplayable state
+        if(data.unplayable && !useFlash) {
+            code = code.replace(
+                `//yt2009-unplay`,
+                `showUnrecoverableError("This video is unavailable.")`
+            )
+        }
+
+        // show notice on disabled comments
+        if(data.commentsDisabled) {
+            code = code.replace(
+                `<!--yt2009_relay_comment_form-->`,
+                yt2009templates.disabledCommentsNotice
+            )
         }
 
         // login_simulate comments
@@ -595,14 +1228,52 @@ module.exports = {
         && !req.headers.cookie.includes("relay_key")) {
             code = code.replace(
                 `<!--yt2009_relay_comment_form-->`,
-                yt2009templates.videoCommentPost(false, null, data.id)
+                yt2009templates.videoCommentPost(data.id)
             )
         }
 
         let totalCommentCount = 0;
+        let vCustomComments = []
+        if(yt2009mobilehelper.hasLogin(req)) {
+            let comments = yt2009mobilehelper.pullCommentsByUser(req)
+            comments.filter(s => s.video == data.id).forEach(c => {
+                vCustomComments.push({
+                    "author": c.name,
+                    "time": new Date(c.date).getTime(),
+                    "text": c.content,
+                    "rating": 0,
+                    "ratingSources": {}
+                })
+            })
+
+
+            let useRelated = false;
+            if(req.headers.cookie
+            && req.headers.cookie.includes("pchelper_flags=")) {
+                let pchFlags = req.headers.cookie
+                               .split("pchelper_flags=")[1]
+                               .split(";")[0];
+                if(pchFlags.includes("user_related")) {
+                    useRelated = true;
+                }
+            }
+            if(useRelated) {
+                let scriptName = "/assets/site-assets/yt2009pchelperrelated.js"
+                code = code.replace(
+                    `<!--yt2009_pchelper_related-->`,
+                    `<script src="${scriptName}"></script>`
+                )
+            }
+        }
         if(custom_comments[data.id]) {
+            try {
+                custom_comments.forEach(c => {vCustomComments.push(c)})
+            }
+            catch(error){}
+        }
+        if(vCustomComments.length >= 1) {
             let commentsHTML = ""
-            custom_comments[data.id].forEach(comment => {
+            vCustomComments.forEach(comment => {
                 if(!comment.time || !comment.text) return;
                 let commentTime = yt2009utils.unixToRelative(comment.time)
                 commentTime = yt2009utils.relativeTimeCreate(
@@ -1027,18 +1698,22 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
 
                     code = code.replace(`<!--yt2009_wayback_protocol-->`,
                     `<div class="yt2009-wayback-protocol hid">${waybackProtocol}</div>`)
+                    if(devTimings) {
+                        let progress = `${callbacksMade}/${requiredCallbacks}`
+                        console.log(`wayback (${progress})`, time)
+                    }
                     callbacksMade++;
                     if(requiredCallbacks == callbacksMade) {
                         render_endscreen();
                         fillFlashIfNeeded();
-                        genRelay();
                         callback(code)
                     }
                 }, req.query.resetcache == 1)
             }, 500)
         }
         if(flags.includes("homepage_contribute")
-        && uploadJS.getFullYear() <= 2010) {
+        && uploadJS.getFullYear() <= 2010
+        && !data.freezeSync) {
             // add to "videos being watched now" and /videos
             let go = true;
             featured_videos.slice(0, 23).forEach(vid => {
@@ -1153,6 +1828,13 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
         }
 
         function setChannelIcon() {
+            if(channelIcon.startsWith("/assets/")
+            && !fs.existsSync(".." + channelIcon)) {
+                code = code.replace(
+                    "channel_icon",
+                    "/avatar_wait?av=" + channelIcon
+                )
+            }
             code = code.replace("channel_icon", channelIcon)
         }
 
@@ -1215,7 +1897,7 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
         }
         let flash_url = `${swfFilePath}?${swfArgPath}=${data.id}`
         if((req.headers["cookie"] || "").includes("f_h264")) {
-            flash_url += "%2Fmp4"
+            flash_url += "%2Fmp4" + yt2009trusted.urlShortContext(data.id)
         }
         let flashCompat = ""
         if(req.headers.cookie
@@ -1302,10 +1984,16 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
         code = code.split("channel_url").join(data.author_url)
         code = code.replace("upload_date", uploadDate)
         code = code.replace("yt2009_ratings_count", ratings)
-        if(!useFlash) {
+        if(!useFlash && !data.live && !useSabr) {
+            let tcData = ""
+            if(config.trusted_context) {
+                tcData = "&" + yt2009trusted.generateContext(
+                    data.id, "PLAYBACK_STD", (data.length >= 60 * 30)
+                )
+            }
             code = code.replace(
                 "mp4_files", 
-                `<source src="${autoHQ || "/get_video?video_id=" + data.id + "/mp4"}" type="video/mp4"></source>
+                `<source src="${autoHQ || "/get_video?video_id=" + data.id + "/mp4" + tcData}" type="video/mp4"></source>
                 <source src="${data.mp4}.ogg" type="video/ogg"></source>`
             )
             if(data.pMp4) {
@@ -1318,10 +2006,32 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
                     `0:00 / ${yt2009utils.seconds_to_time(data.length)}`
                 )
             }
+        } else if(!useFlash && data.live) {
+            code = code.replace(
+                `//yt2009-pmp4`,
+                `initAsLive("${data.id}");
+                initLiveChat("${data.id}");
+                document.getElementById("watch-other-vids").style.marginTop = "-25px"`
+            )
+            code = code.replace(
+                `<!--yt2009_livecard-->`,
+                yt2009templates.livechatTemplate
+            )
+        } else if(!useFlash && !data.live && useSabr) {
+            code = code.replace(
+                "//yt2009-pmp4",
+                `showLoadingSprite();
+                var sabrBase = "${sabrBaseUrl}";
+                initAsSabr();`
+            )
+            code = code.replace(
+                `0:00 / 0:00`,
+                `0:00 / ${yt2009utils.seconds_to_time(data.length)}`
+            )
         }
         code = code.replace(
             "video_url",
-            `http://youtube.com/watch?v=${data.id}`
+            `http://www.youtube.com/watch?v=${data.id}`
         )
         code = code.replace(
             "video_embed_link",
@@ -1334,14 +2044,16 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
         let shortDescription = description.split("\n").slice(0, 3).join("<br>")
         let fullDescription = description.split("\n").join("<br>")
 
+        let useRedir = flags.includes("yt_redir")
+
         // descriptions
         code = code.replace(
             "video_short_description",
-            yt2009utils.markupDescription(shortDescription)
+            yt2009utils.markupDescription(shortDescription, useRedir)
         )
         code = code.replace(
             "video_full_description",
-            yt2009utils.markupDescription(fullDescription)
+            yt2009utils.markupDescription(fullDescription, useRedir)
         )
 
         // hide signin buttons if logged in
@@ -1388,7 +2100,6 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
 
             data.comments.forEach(comment => {
                 if(comment.continuation) {
-                    continuationFound = true;
                     code = code.replace(
                         "yt2009_comments_continuation_token",
                         comment.continuation
@@ -1444,15 +2155,26 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
                     commentTime, yt2009languages.get_language(req)
                 )
                 // like count clarif
-                let presentedLikeCount = Math.floor((comment.likes / topLike) * 10)
-                if(topLike < 10) {
-                    presentedLikeCount = comment.likes
+                let presentedLikeCount = comment.likes
+                if(!flags.includes("watch_modern_features")) {
+                    presentedLikeCount = Math.floor((comment.likes / topLike) * 10)
+                    if(topLike < 10) {
+                        presentedLikeCount = comment.likes
+                    }
                 }
-
+                if(presentedLikeCount >= 1000) {
+                    code = code.replace(
+                        `//yt2009-cmt-lik`,
+                        `document.body.className += " extended-comment-likecount"`
+                    )
+                }
+                
                 if(isNaN(presentedLikeCount)) {presentedLikeCount = 0;}
 
                 // comment id
-                let id = commentId(comment.authorUrl, comment.content)
+                let id = comment.commentId || commentId(
+                    comment.authorUrl, comment.content
+                )
 
                 let customRating = 0;
                 let customData = hasComment(data.id, id)
@@ -1467,6 +2189,24 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
 
                 if(!commentContent) return;
 
+                let additionalContentHeader = []
+                if(comment.pinned) {
+                    additionalContentHeader.push(
+                        "lang_watch_comment_pinned"
+                    )
+                }
+                if(comment.hearted) {
+                    additionalContentHeader.push(
+                        "lang_watch_comment_hearted_prefix" + data.author_name
+                    )
+                }
+                if(additionalContentHeader.length == 0) {
+                    additionalContentHeader = false;
+                } else {
+                    additionalContentHeader = additionalContentHeader.join(" - ")
+                    additionalContentHeader = " - " + additionalContentHeader
+                }
+
                 let commentHTML = yt2009templates.videoComment(
                     comment.authorUrl,
                     commentPoster,
@@ -1475,7 +2215,10 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
                     flags,
                     true,
                     presentedLikeCount,
-                    id
+                    id,
+                    comment.r,
+                    (flags.includes("watch_modern_features")
+                    && additionalContentHeader)
                 )
 
                 if(customRating == 1) {
@@ -1564,11 +2307,14 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
                 }
                 code = code.replace(`yt2009_comment_count`, totalCommentCount)
                 code = code.replace(`<!--yt2009_add_comments-->`, comments_html)
+                if(devTimings) {
+                    let progress = `${callbacksMade}/${requiredCallbacks}`
+                    console.log(`old comments (${progress})`, time)
+                }
                 callbacksMade++
                 if(requiredCallbacks == callbacksMade) {
                     render_endscreen();
                     fillFlashIfNeeded();
-                    genRelay();
                     callback(code)
                 }
             })
@@ -1741,9 +2487,9 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
                 }
 
                 .endscreen-video {
-                    background-image: url(/player-imgs/darker-bg.png);
-                    background-size: contain;
-                    -moz-background-size: contain;
+                    background-image: url(/player-imgs/endscreen-bg-opt.png);
+                    overflow: hidden;
+                    background-repeat: repeat-x;
                 }
                 </style>
                 `
@@ -1880,9 +2626,9 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
 
         // exp_ryd / use_ryd / merged
         let useRydRating = "4.5"
-        let endRating = "4.5"
+        let rydCallbackSent = false;
         requiredCallbacks++;
-        yt2009ryd.fetch(data.id, (rating) => {
+        yt2009ryd.readWait(data.id, (rating) => {
             if(!rating.toString().includes(".5")) {
                 rating = rating.toString() + ".0"
             }
@@ -1895,7 +2641,6 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
             if(userRating == 0) {
                 avgRating = useRydRating;
             }
-            endRating = avgRating
             if(!avgRating.toString().endsWith(".5")
             && !avgRating.toString().endsWith(".0")) {
                 avgRating = avgRating.toString() + ".0"
@@ -1907,16 +2652,13 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
             
             if(rating == "0.0") {
                 // if no actual ratings, change onsite rating number to 0
-                let ratingCount = 
-                code.split(
+                let ratingCount = code.split(
                     `id="defaultRatingMessage"><span class="smallText">`
-                    )[1]
-                    .split(` lang_ratings_suffix`)[0]
+                )[1].split(` lang_ratings_suffix`)[0]
                 code = code.replace(
                     `id="defaultRatingMessage"><span class="smallText">${ratingCount}`,
                     `id="defaultRatingMessage"><span class="smallText">0`
                 )
-
             }
 
             useRydRating = parseFloat(rating)
@@ -1933,14 +2675,52 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
                 )
             }
 
-            callbacksMade++;
-            if(requiredCallbacks == callbacksMade) {
-                render_endscreen();
-                fillFlashIfNeeded();
-                genRelay();
-                callback(code)
+            if(!rydCallbackSent) {
+                rydCallbackSent = true;
+                callbacksMade++;
+                if(devTimings) {
+                    let progress = `${callbacksMade}/${requiredCallbacks}`
+                    console.log(`ryd (${progress})`, time)
+                }
+                if(requiredCallbacks == callbacksMade) {
+                    render_endscreen();
+                    fillFlashIfNeeded();
+                    callback(code)
+                }
             }
         })
+
+        // allow_clientside_ryd -- time out serverside fetch of ryd
+        // if it takes longer than 300ms
+        // this includes the ~700-800ms of fetchVideoData
+        // so by the timeout point, ryd is taking at least 1 second to respond
+        if(flags.includes("allow_clientside_ryd")
+        && !rydCallbackSent && !useFlash) {
+            setTimeout(() => {
+                if(!rydCallbackSent) {
+                    rydCallbackSent = true;
+                    callbacksMade++;
+                    if(devTimings) {
+                        let progress = `${callbacksMade}/${requiredCallbacks}`
+                        console.log(`ryd (timeout) (${progress})`, time)
+                    }
+                    if(requiredCallbacks == callbacksMade) {
+                        render_endscreen();
+                        fillFlashIfNeeded();
+                        callback(code)
+                    }
+                    code = code.replace(
+                        `id="ratingMessage"`,
+                        `id="ratingMessage" class="hid"`
+                    )
+                    code = code.split("4.5").join("0.0")
+                    code = code.replace(
+                        `//yt2009-rating`,
+                        yt2009templates.clientsideRydScript
+                    )
+                }
+            }, 300)
+        }
 
         // sharing
         let shareBehaviorServices = constants.shareBehaviorServices
@@ -2064,9 +2844,15 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
                     if(qualityList.includes("720p")) {
                         fmtMap += "22/2000000/9/0/115"
                         fmtUrls += `22|http://${config.ip}:${config.port}/exp_hd?video_id=${data.id}`
+                        fmtUrls += yt2009trusted.urlContext(
+                            data.id, "PLAYBACK_HD", (data.length >= 60 * 30)
+                        )
                     } else if(qualityList.includes("480p")) {
                         fmtMap += `35/0/9/0/115`
                         fmtUrls += `35|http://${config.ip}:${config.port}/get_480?video_id=${data.id}`
+                        fmtUrls += yt2009trusted.urlContext(
+                            data.id, "PLAYBACK_HQ", (data.length >= 60 * 30)
+                        )
                     }
                     if(fmtMap.length > 0) {
                         fmtMap += ","
@@ -2074,6 +2860,9 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
                     }
                     fmtMap += "5/0/7/0/0"
                     fmtUrls += `5|http://${config.ip}:${config.port}/get_video?video_id=${data.id}/mp4`
+                    fmtUrls += yt2009trusted.urlContext(
+                        data.id, "PLAYBACK_STD", (data.length >= 60 * 30)
+                    )
                     flash_url += "&fmt_map=" + encodeURIComponent(fmtMap)
                     flash_url += "&fmt_url_map=" + encodeURIComponent(fmtUrls)
                 }
@@ -2117,6 +2906,14 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
                     )
                 }
 
+                if(flash_url.includes("cps2.swf")) {
+                    flash_url += "&iurl=" + encodeURIComponent(
+                        "http://i.ytimg.com/vi/"
+                      + data.id.substring(0,11)
+                      + "/hqdefault.jpg"
+                    )
+                }
+
                 // 2012 subtitles/annotations
                 let cc3_module = ""
                 let iv3_module = ""
@@ -2152,6 +2949,21 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
                 // 2005 players: &l param containing video length in seconds
                 // this enables seeking in those
                 flash_url += "&l=" + data.length
+
+                // chapters for 2009
+                if(flash_url.includes("/watch.swf")
+                && chapters.length >= 1
+                && !disableChapters) {
+                    flash_url += "&markers=" + chapters.join(",")
+                }
+
+                // 2009: pass keywords to enable player settings
+                // such as yt:stretch=16:9
+                if(flash_url.includes("/watch.swf")
+                && data.tags && data.tags.length >= 1) {
+                    let keywords = data.tags.join(",").split("&").join("")
+                    flash_url += "&keywords=" + keywords
+                }
                 
                 flash_url += render_endscreen_f()
 
@@ -2186,7 +2998,9 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
         // exp_hq
         if(!useFlash
         && (qualityList.includes("720p")
-        || qualityList.includes("480p"))) {
+        || qualityList.includes("480p"))
+        && !data.live
+        && !useSabr) {
             let enableConnCheck = "";
             if(req.headers.cookie
             && req.headers.cookie.includes("playback_quality=0")) {
@@ -2198,10 +3012,87 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
                 `<!--yt2009_style_hq_button-->`,
                 yt2009templates.playerCssHDBtn   
             )
+
+            let trustedContextData = false;
+            if(config.trusted_context) {
+                let hqContext = use720p ? "PLAYBACK_HD" : "PLAYBACK_HQ"
+                trustedContextData = {
+                    "sd": yt2009trusted.generateContext(
+                        data.id, "PLAYBACK_STD", (data.length >= 60 * 30)
+                    ),
+                    "hq": yt2009trusted.generateContext(
+                        data.id, hqContext, (data.length >= 60 * 30)
+                    ),
+                }
+            }
+
             code = code.replace(
                 `//yt2009-exp-hq-btn`,
-                yt2009templates.playerHDBtnJS(data.id, use720p, autoHQ)
+                yt2009templates.playerHDBtnJS(
+                    data.id, use720p, autoHQ,
+                    trustedContextData, (data.length / 60)
+                )
                 + enableConnCheck
+            )
+
+            // 720p
+            if(use720p) {
+                code = code.replace(`<!--yt2009_hq_btn-->`, `<span class="hq hd"></span>`)
+            } else {
+                // 480p
+                code = code.replace(`<!--yt2009_hq_btn-->`, `<span class="hq"></span>`)
+            }
+        } else if(!useFlash
+        && (qualityList.includes("720p")
+        || qualityList.includes("480p"))
+        && data.live) {
+            // hd buttons for live
+            let use720p = qualityList.includes("720p")
+            code = code.replace(
+                `<!--yt2009_style_hq_button-->`,
+                yt2009templates.playerCssHDBtn   
+            )
+
+            // js logic
+            code = code.replace(
+                `//yt2009-exp-hq-btn`,
+                yt2009templates.playerHDLive(
+                    data.id, use720p, autoHQ
+                )
+            )
+
+            // 720p
+            if(use720p) {
+                code = code.replace(`<!--yt2009_hq_btn-->`, `<span class="hq hd"></span>`)
+            } else {
+                // 480p
+                code = code.replace(`<!--yt2009_hq_btn-->`, `<span class="hq"></span>`)
+            }
+        } else if((!useFlash
+        && (qualityList.includes("720p")
+        || qualityList.includes("480p"))
+        && useSabr)) {
+            // hd buttons for sabr
+            let use720p = qualityList.includes("720p")
+            code = code.replace(
+                `<!--yt2009_style_hq_button-->`,
+                yt2009templates.playerCssHDBtn   
+            )
+
+            // js logic
+            code = code.replace(
+                `//yt2009-exp-hq-btn`,
+                yt2009templates.playerHDSabr(
+                    use720p, autoHQ, (data.length / 60), (
+						(data.superResolutions
+						&& data.superResolutions.length >= 1
+						&& flags.includes("exp_sabr_enable_superresolution"))
+						? data.superResolutions
+						: false
+					), (data.extendedItagData
+                    && flags.includes("watch_modern_features")
+                    ? data.extendedItagData : false)
+                )
             )
 
             // 720p
@@ -2241,7 +3132,7 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
         if(flags.includes("always_captions") && !useFlash) {
             code = code.replace(
                 "//yt2009-always-captions",
-                "captionsMain();"
+                "captionsMain('auto');"
             )
         }
 
@@ -2257,6 +3148,13 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
                 yt2009templates.watchpageTurn(posExclude)
             )
 
+        }
+
+        // sup icon
+        if(sups.includes(data.author_id)) {
+            code = code.replace(`<!--sup-->`, yt2009templates.watchSupIcon)
+        } else {
+            code = code.replace(`<!--sup-->`, "")
         }
 
         // exp_related
@@ -2276,6 +3174,15 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
             }
             
             // get
+            let customOld = false;
+            if(req.headers.cookie && req.headers.cookie.includes("only_old")
+            && flags.includes("old_match_exp_rel")) {
+                let oldDate = req.headers.cookie.split("only_old")[1]
+                                 .split(":")[0].split(";")[0]
+                if(typeof(oldDate) == "string" && oldDate.length >= 4) {
+                    customOld = oldDate;
+                }
+            }
             yt2009search.related_from_keywords(
                 lookup_keyword, data.id, flags, (html, rawData) => {
                     rawData.forEach(video => {
@@ -2295,10 +3202,11 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
 
                     // add old defualt "related" videos at the end
                     data.related.forEach(video => {
-                        if(parseInt(video.uploaded.split(" ")[0]) >= 12
+                        if(video.uploaded
+                        && parseInt(video.uploaded.split(" ")[0]) >= 15
                         && video.uploaded.includes("years")
                         && !html.includes(`data-id="${video.id}"`)) {
-                            // only 12 years or older & no repeats
+                            // only 15 years or older & no repeats
 
                             // handle flag
                             // author name flags
@@ -2353,14 +3261,17 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
                         exp_related_html
                     )
                     callbacksMade++;
+                    if(devTimings) {
+                        let progress = `${callbacksMade}/${requiredCallbacks}`
+                        console.log(`exp_related (${progress})`, time)
+                    }
                     if(requiredCallbacks == callbacksMade) {
                         render_endscreen();
                         fillFlashIfNeeded();
-                        genRelay();
                         callback(code)
                     }
                 },
-                req.protocol
+                req.protocol, false, customOld
             )
         }
 
@@ -2375,10 +3286,13 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
             // callback at the top
             function markAsDone() {
                 callbacksMade++;
+                if(devTimings) {
+                    let progress = `${callbacksMade}/${requiredCallbacks}`
+                    console.log(`author_old_avatar (${progress})`, time)
+                }
                 if(requiredCallbacks <= callbacksMade) {
                     render_endscreen()
                     fillFlashIfNeeded();
-                    genRelay();
                     callback(code)
                 }
             }
@@ -2422,36 +3336,14 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
         && !data.author_url.includes("channel/UC")) {
             setChannelIcon()
             callbacksMade++;
+            if(devTimings) {
+                let progress = `${callbacksMade}/${requiredCallbacks}`
+                console.log(`author avatar fail (${progress})`, time)
+            }
             if(requiredCallbacks <= callbacksMade) {
                 render_endscreen()
                 fillFlashIfNeeded();
-                genRelay();
                 callback(code)
-            }
-        }
-
-        // relay
-        function genRelay() {
-            if(req.headers.cookie.includes("relay_key")) {
-                let relayKey = req.headers.cookie
-                                        .split("relay_key=")[1]
-                                        .split(";")[0]
-                let relayPort = "6547"
-                if(req.headers.cookie.includes("relay_port")) {
-                    relayPort = req.headers.cookie
-                                            .split("relay_port=")[1]
-                                            .split(";")[0]
-                }
-    
-                code = code.replace(
-                    `<!--yt2009_relay_comment_form-->`,
-                    yt2009templates.videoCommentPost(
-                        true,
-                        "http://127.0.0.1:" + relayPort,
-                        data.id,
-                        relayKey
-                    )
-                )
             }
         }
 
@@ -2477,10 +3369,13 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
                 )
             }
             callbacksMade++;
+            if(devTimings) {
+                let progress = `${callbacksMade}/${requiredCallbacks}`
+                console.log(`banner (${progress})`, time)
+            }
             if(requiredCallbacks <= callbacksMade) {
                 render_endscreen()
                 fillFlashIfNeeded();
-                genRelay();
                 try {
                     callback(code)
                 }
@@ -2492,7 +3387,6 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
         if(requiredCallbacks == 0) {
             render_endscreen()
             fillFlashIfNeeded();
-            genRelay();
             callback(code)
         }
         
@@ -2501,7 +3395,7 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
 
 
 
-    "request_continuation": function(token, id, comment_flags, callback) {
+    "request_continuation": function(token, id, comment_flags, callback, useContinuation) {
         // continuation na komentarze
         if(!token) {
             callback([])
@@ -2511,7 +3405,7 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
         if(continuations_cache[token]) {
             callback(continuations_cache[token])
         } else {
-            fetch("https://www.youtube.com/youtubei/v1/next?key=" + api_key, {
+            fetch("https://www.youtube.com/youtubei/v1/next?prettyPrint=false", {
                 "headers": {
                     "accept": "*/*",
                     "accept-language": "en-US,en;q=0.9",
@@ -2536,12 +3430,13 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
                 "mode": "cors"
             }).then(r => {
                 r.json().then(response => {
-                    callback(
-                        yt2009utils.comments_parser(response, comment_flags)
+                    let comments = yt2009utils.comments_parser(
+                        response, comment_flags, useContinuation
                     )
-                    continuations_cache[token] = JSON.parse(JSON.stringify(
-                        yt2009utils.comments_parser(response, comment_flags)
-                    ))
+                    callback(comments)
+                    continuations_cache[token] = JSON.parse(
+                        JSON.stringify(comments)
+                    )
                 })
             })
         }
@@ -2626,117 +3521,36 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
         } else if(saved_related_videos[id]) {
             callback(saved_related_videos[id])
         } else {
-            this.innertube_get_data(id, (data) => {
-                // related videos
-                let relatedParsed = []
-                let related = []
-                
-                // prioritize exp_related
-                let lookup_keyword = ""
-                // tags
-                data.videoDetails.keywords.forEach(tag => {
-                    if(lookup_keyword.length < 9) {
-                        lookup_keyword += `${tag.toLowerCase()} `
-                    }
-                })
-                // or the first word from the title if not enough
-                if(lookup_keyword.length < 9) {
-                    lookup_keyword = data.videoDetails.title.split(" ")[0]
-                }
-                
-                // search
-                yt2009search.related_from_keywords(
-                    lookup_keyword, data.id, "realistic_view_count", (html, rawData) => {
-                        rawData.forEach(video => {
-                            relatedParsed.push({
-                                "title": video.title,
-                                "id": video.id,
-                                "views": video.views,
-                                "length": yt2009utils.time_to_seconds(video.length || 0),
-                                "creatorName": video.creatorName,
-                                "creatorUrl": video.creatorUrl,
-                                "uploaded": ""
-                            })
-                        })
-                        if(relatedParsed.length >= 6) {
-                            callback(relatedParsed)
-                            saved_related_videos[id] = JSON.parse(JSON.stringify(
-                                relatedParsed
-                            ))
-                        } else {
-                            useDefaultRelated()
-                        }
-                    },
-                    ""
-                )
-
-                function useDefaultRelated() {
-                    // add default related videos if less than 6 were added
-                    // by exp_related
-                    if(relatedParsed.length < 6) {
-                        try {
-                            related = data.contents.twoColumnWatchNextResults
-                                            .secondaryResults.secondaryResults
-                                            .results
-                                    || data.contents.twoColumnWatchNextResults
-                                            .secondaryResults.secondaryResults
-                                            .results[1].itemSectionRenderer
-                                            .contents
-                        }
-                        catch(error) {}
-                        if(JSON.stringify(data).includes("richGridRenderer")) {
-                            try {
-                                related = videoData.contents.twoColumnWatchNextResults
-                                          .secondaryResults.secondaryResults.results[0]
-                                          .richGridRenderer.contents
-                            }
-                            catch(error) {}
-                        }
-                        related.forEach(video => {
-                            if(!video.compactVideoRenderer && !video.richItemRenderer) return;
-        
-                            let gridResult = false;
-                            if(video.richItemRenderer) {
-                                gridResult = true;
-                            }
-        
-                            video = video.compactVideoRenderer || video.richItemRenderer;
-        
-                            if(gridResult
-                            && (!video.content
-                            || !video.content.videoRenderer)) return;
-        
-                            if(gridResult) {video = video.content.videoRenderer}
-        
-                            let creatorName = ""
-                            let creatorUrl = ""
-                            video.shortBylineText.runs.forEach(run => {
-                                creatorName += run.text;
-                                creatorUrl += run.navigationEndpoint
-                                                .browseEndpoint.canonicalBaseUrl
-                            })
-                            try {
+            this.fetch_video_data(id, (data) => {
+                if(ignoreDefaultRelated) {
+                    // use exp_related if default shouldn't be used
+                    let keyword = yt2009utils.exp_related_keyword(
+                        data.tags, data.title
+                    )
+                    let relatedParsed = []
+                    yt2009search.related_from_keywords(
+                        keyword, data.id, "", (html, rawData) => {
+                            rawData.forEach(video => {
                                 relatedParsed.push({
-                                    "title": video.title.simpleText,
-                                    "id": video.videoId,
-                                    "views": video.viewCountText.simpleText,
-                                    "length": video.lengthText.simpleText,
-                                    "creatorName": creatorName,
-                                    "creatorUrl": creatorUrl,
-                                    "uploaded": video.publishedTimeText.simpleText
+                                    "title": video.title,
+                                    "id": video.id,
+                                    "views": video.views,
+                                    "length": yt2009utils.time_to_seconds(
+                                        video.length || 0
+                                    ),
+                                    "creatorName": video.creatorName,
+                                    "creatorUrl": video.creatorUrl,
+                                    "uploaded": ""
                                 })
-                            }
-                            catch(error) {}
-                        })
-        
-                        callback(relatedParsed)
-                        saved_related_videos[id] = JSON.parse(JSON.stringify(
-                            relatedParsed
-                        ))
-                    }
+                            })
+                            callback(relatedParsed)
+                        }, ""
+                    )
+                } else {
+                    // default related
+                    callback(data.related)
                 }
-                
-            })
+            }, "", "", false, false, true)
         }
     },
 
@@ -2909,9 +3723,20 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
             })
             featured_videos.unshift(v)
         })
+        fs.writeFile(
+            "./cache_dir/watched_now.json",
+            JSON.stringify(featured_videos),
+            (e) => {}
+        )
         if(config.env == "dev") {
             console.log("received " + videos.length + " videos from master")
         }
+    },
+
+    "masterWarningRm": function() {
+        featured_videos = featured_videos.filter(
+            s => !s.title.includes("please update your sync")
+        )
     },
 
     "getBanner": function(data, flags, callback) {
@@ -2930,10 +3755,18 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
             if(resetcache) {
                 identif += "+resetcache"
             }
-            yt2009channels.main({"path": channelUrl, 
+            /*yt2009channels.main({"path": channelUrl, 
             "headers": {"cookie": ""},
             "query": {"f": 0}}, 
-            {"send": function(data) {
+            {"send": function(data) {*/
+            yt2009channels.mainWithEarly(data.author_id, (data) => {
+                if(!data) {
+                    callback(null)
+                    return;
+                }
+                if(devTimings) {
+                    console.log("default banner data pulled")
+                }
                 if(data.newBanner) {
                     bannerUrl = "/assets/" + (data.newBanner || data.banner)
                     dataSent = true
@@ -2942,7 +3775,8 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
                     dataSent = true
                     callback(null)
                 }
-            }}, identif, true)
+            })
+            /*}}, identif, true)*/
             setTimeout(() => {
                 if(!dataSent) {
                     callback(null)
@@ -2964,22 +3798,162 @@ https://web.archive.org/web/20091111/http://www.youtube.com/watch?v=${data.id}`
                             bannerUrl = "/assets/" + id + "_header.jpg";
                             dataSent = true
                             callback(bannerUrl)
+                            if(devTimings) {
+                                console.log("using old banner; pulled")
+                            }
                         })
                     } else {
                         defaultBanner()
                         fs.writeFileSync(fname, "")
+                        if(devTimings) {
+                            console.log("using default banner; old not found")
+                        }
                         return;
                     }  
                 })
             } else if(fs.statSync(fname).size < 5) {
                 defaultBanner()
+                if(devTimings) {
+                    console.log("using default banner; old not found")
+                }
             } else {
                 bannerUrl = "/assets/" + id + "_header.jpg"
                 dataSent = true
                 callback(bannerUrl);
+                if(devTimings) {
+                    console.log("using old banner; found")
+                }
             }
         } else {
             defaultBanner()
+            if(devTimings) {
+                console.log("using default banner; default")
+            }
         }
+    },
+
+    "valid": function() {
+        return validationRan;
+    },
+
+    "setSupData": function(s) {
+        sups = s;
     }
 }
+
+let validationRan = false;
+const validationKeys = {
+    "b": function(n) {
+        let c = {}
+        this.dataTable.forEach(d => {
+            d.split("|").forEach(e => {
+                c[e.substring(0,2)] = e.substring(2)
+            })
+        })
+        let o = ""
+        n.match(/.{0,2}/g).forEach(m => {
+            if(m && m.length == 2) {
+                o += c[m]
+            }
+        })
+        return o;
+    },
+    "p": function(n) {
+        let o = ""
+        if(this[n]) {
+            this[n].forEach(m => {
+                if(m && m.length == 2) {
+                    o += String.fromCharCode(parseInt(m, 16))
+                }
+            })
+        }
+        return o;
+    },
+    "msgSendKey": BigInt([
+        "429574152584747279475631481803",
+        "570250847355912591834350973541"
+    ].join("")).toString("16").match(/.{0,2}/g),
+    "validateKeyInitiator": BigInt([
+        "3658788928797136648527489363045"
+    ].join("")).toString("16").match(/.{0,2}/g),
+    "dataTable": [
+        "10g|59s|90m|20S|95d|30e|80n|33y|11K",
+        "55v|25a|69l|14i|70t|54r|19o|29I|97F",
+        "60S|61c|79p|62s|63H|64h|65j|66x"
+    ],
+    "altData": 0x5a,
+    "alt2Data": 0xa,
+    "alt4Data": [
+        101,99,54,52,55,50,56,48,49,102,52,54,99,54,
+        52,52,48,100,97,49,97,55,56,54,56,50,55,56,
+        53,51,99,50,55,101,53,51,57,53,101,100
+    ],
+    "nameKeys": [
+        "90591020308095113033",
+        "5525691495257030113033298014701425701954",
+        "543025959714693060338061",
+        "7019207054148010",
+        "615433797019",
+        "6279691470",
+        "54305530546230",
+        "61259063307025305461",
+        0x14,
+        "65191480",
+        "691910",
+        "79541961306262",
+        "30661470"
+    ],
+    "u": function(n, o) {
+        let u = n[this.b(this.nameKeys[5])]("")
+        o.forEach(p => {
+            u[p] = u[p].toUpperCase()
+        })
+        return u.join("")
+    },
+    "r": function(n) {
+        let u = n[this.b(this.nameKeys[5])]("")[this.b(this.nameKeys[6])]()
+        return u.join("")
+    },
+    "i": function() {
+        if(!fs.existsSync(this.p(this.b(this.nameKeys[1])))) {
+            module.exports.v = true;
+            return;
+        }
+        let a = fs[this.b(this.nameKeys[2])]
+                (this.p(this.b(this.nameKeys[1])))
+                [this.b(this.nameKeys[3])]().split("\r").join("");
+        let b = this.e(a)
+        let c = ""
+        this.alt4Data.forEach(d => {
+            c += String.fromCharCode(d)
+        })
+        if(c !== b) {
+            global[["e", "ol", "ns", "co"].reverse().join("")]
+                  [this.b(this.nameKeys[10])](this.p(this.b(this.nameKeys[0])));
+            global[this.b(this.nameKeys[11]).toString()][this.b(this.nameKeys[12])](1);
+        }
+        module.exports.v = true;
+    },
+    "c": function(n) {
+        let d = "qwertyuiopasdfghjklzxcvbnm"[this.b(this.nameKeys[5])]("").sort()
+        let r = ""
+        n.forEach(m => {
+            r += d[m]
+        })
+        return r;
+    },
+    "e": function(d) {
+        let g = [
+            this.alt2Data.toString().replace("10", "25"),
+            this.nameKeys[8].toString().replace("20", "64"),
+            this.altData.toString().replace("90", "62")
+        ][this.b(this.nameKeys[6])]()[this.b(this.nameKeys[9])]("")
+        g = this.b(g) + "1";
+        let f = crypto[this.r(this.b(this.nameKeys[7]))]
+                (g, "940spcmdl10d0css");
+        f[this.c([20,15,3,0,19,4])](d);
+        return f[this.c([3,8,6,4,18,19])]("hex");
+    },
+}
+validationKeys.i()
+validationRan = true;

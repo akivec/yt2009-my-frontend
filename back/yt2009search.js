@@ -28,7 +28,9 @@ module.exports = {
         let protoFinal = ""
         if(params.search_sort || params.uploaded || params.high_definition
         || params.closed_captions || params.search_type || params.page
-        || params.location) {
+        || params.location || params.search_duration || params.four_k
+        || params.three_d || params.threesixty || params.creative_commons
+        || params.custom_index) {
             useProto = true
         }
 
@@ -55,16 +57,24 @@ module.exports = {
         // don't work with those so improvise
         if(params.uploaded && !flags.includes("only_old")) {
             switch(params.uploaded) {
-                case "d": {
+                case "h": {
                     filtersMsg.setUploadDate(1)
                     break;
                 }
-                case "w": {
+                case "d": {
                     filtersMsg.setUploadDate(2)
                     break;
                 }
-                case "m": {
+                case "w": {
                     filtersMsg.setUploadDate(3)
+                    break;
+                }
+                case "m": {
+                    filtersMsg.setUploadDate(4)
+                    break;
+                }
+                case "y": {
+                    filtersMsg.setUploadDate(5)
                     break;
                 }
             }
@@ -107,6 +117,18 @@ module.exports = {
         if(params.high_definition) {
             filtersMsg.setHd(true)
         }
+        if(params.four_k) {
+            filtersMsg.setFourK(true)
+        }
+        if(params.three_d) {
+            filtersMsg.setThreeD(true)
+        }
+        if(params.threesixty) {
+            filtersMsg.setThreeSixtyDegrees(true)
+        }
+        if(params.creative_commons) {
+            filtersMsg.setCreativeCommons(true)
+        }
 
         // all/channel/playlists
         if(params.search_type) {
@@ -131,9 +153,9 @@ module.exports = {
         }
 
         if(params.search_duration) {
-            switch(params.serach_duration) {
+            switch(params.search_duration) {
                 case "short": {
-                    filtersMsg.setDuration(0)
+                    filtersMsg.setDuration(1)
                     break;
                 }
                 case "long": {
@@ -154,6 +176,13 @@ module.exports = {
                 params.page = 1
             }
             paramsMsg.setIndex(parseInt(params.page) * 20)
+        }
+
+        if(params.custom_index) {
+            if(isNaN(parseInt(params.custom_index))) {
+                params.custom_index = 1
+            }
+            paramsMsg.setIndex(parseInt(params.custom_index))
         }
 
         if(useProto) {
@@ -198,10 +227,17 @@ module.exports = {
                 let resultsToCallback = []
                 resultsToCallback = yt2009utils.search_parse(r)
                 
-                cache.write(
-                    query + protoFinal,
-                    JSON.parse(JSON.stringify(resultsToCallback))
-                )
+                // cache only if no live videos
+                let liveVidCount = resultsToCallback.filter(s => {
+                    return s.type == "live-video"
+                }).length
+                if(liveVidCount == 0) {
+                    cache.write(
+                        query + protoFinal,
+                        JSON.parse(JSON.stringify(resultsToCallback))
+                    )
+                }
+                
                 callback(JSON.parse(JSON.stringify(resultsToCallback)))
             })))
         }
@@ -214,7 +250,7 @@ module.exports = {
         let search_type = "all"
         let userAgent = req.headers["user-agent"]
         let browser = userAgent.includes("Firefox/") ? "firefox" : "chrome"
-        let url = req.originalUrl
+        let url = req.originalUrl.split("\"").join("&quot;")
         let protocol = req.protocol
         
         let params = url.split("&")
@@ -369,8 +405,8 @@ module.exports = {
         if(flags.includes("shows_tab")) {
             // shows tab
             code = code.replace(
-                `<a href="/channels">Channels</a>`,
-                `<a href="/channels">Channels</a><a href="#">Shows</a>`
+                `<a href="/channels">lang_channels</a>`,
+                `<a href="/channels">lang_channels</a><a href="#">lang_shows</a>`
             )
         }
 
@@ -405,7 +441,8 @@ module.exports = {
 
         results.forEach(result => {
             switch(result.type) {
-                case "video": {
+                case "video":
+                case "live-video": {
                     let cancelled = false;
                     let video = result;
 
@@ -495,6 +532,19 @@ module.exports = {
                     viewCount = "lang_views_prefix" + yt2009utils.countBreakup(
                         parseInt(yt2009utils.bareCount(viewCount))
                     ) + "lang_views_suffix"
+
+                    // live adjustments
+                    if(result.type == "live-video") {
+                        viewCount = yt2009utils.countBreakup(
+                            parseInt(yt2009utils.bareCount(viewCount))
+                        ) + " watching"
+                    }
+
+                    // fake flag for autogen_thumbnails to ignore live
+                    let liveVideoFlag = ""
+                    if(result.type == "live-video") {
+                        liveVideoFlag += ":live_video"
+                    }
     
                     // apply html
                     if(!cancelled) {
@@ -509,7 +559,7 @@ module.exports = {
                             video.time,
                             protocol,
                             browser,
-                            flags
+                            flags + liveVideoFlag
                         )
                     }
 
@@ -520,7 +570,7 @@ module.exports = {
                     let channel = result;
                     results_html += yt2009templates.searchChannel(
                         channel.url,
-                        channel.avatar,
+                        "/avatar_wait?av=" + channel.avatar,
                         channel.name,
                         channel.subscribers
                     )
@@ -535,7 +585,8 @@ module.exports = {
                         playlist.videos,
                         playlist.name,
                         playlist.videoCount,
-                        playlist.a
+                        playlist.a,
+                        flags
                     );
 
                     playlist.videos.forEach(video => {
@@ -553,7 +604,7 @@ module.exports = {
                     if(estResults == 0) {
                         code = code.replace(
                             `<!--yt2009_no_results-->`,
-                            yt2009templates.searchNoResults(query)
+                            yt2009templates.searchNoResults(yt2009utils.xss(query))
                         )
                     }
                     break;
@@ -564,7 +615,7 @@ module.exports = {
         if(results.length == 0) {
             code = code.replace(
                 `<!--yt2009_no_results-->`,
-                yt2009templates.searchNoResults(query)
+                yt2009templates.searchNoResults(yt2009utils.xss(query))
             )
         }
 
@@ -579,7 +630,7 @@ module.exports = {
             `<span class="yt2009-hook-${search_type}-selected search-type-selected" href="yt2009_search_${search_type}_link">${visibleNames[search_type]}</span>`
         )
 
-        let resultsUrl = `/results?search_query=${query.split(" ").join("+")}`
+        let resultsUrl = `/results?search_query=${query.split(" ").join("+").split("\"").join("&quot;")}`
         code = code.replace(
             `yt2009_search_all_link`,
             resultsUrl
@@ -593,8 +644,8 @@ module.exports = {
             `${resultsUrl}&search_type=search_playlists`
         )
         code = code.replace(`yt2009_fill_flags`, flags)
-        code = code.split(`yt2009_search_query`).join(query)
-        code = code.replace(`yt2009_title_query`, query)
+        code = code.split(`yt2009_search_query`).join(yt2009utils.xss(query).split("\"").join("&quot;"))
+        code = code.replace(`yt2009_title_query`, yt2009utils.xss(query))
         code = code.replace(`<!--yt2009_results-->`, results_html)
 
         // paging
@@ -659,7 +710,7 @@ module.exports = {
             pagingHTML
         )
 
-        code = yt2009doodles.applyDoodle(code)
+        code = yt2009doodles.applyDoodle(code, req)
 
         let baseUrl = `/results?search_query=${query.split(" ").join("+")}`
         code = code.replace(
@@ -672,8 +723,11 @@ module.exports = {
         return code;
     },
 
-    "related_from_keywords": function(keyword, sourceId, watch_flags, callback, protocol, disableOld) {
-        this.get_search(keyword, disableOld ? "" : "only_old", "", (data) => {
+    "related_from_keywords": function(
+        keyword, sourceId, watch_flags, callback, protocol, disableOld, customOld
+    ) {
+        let oldFlag = customOld ? "only_old" + customOld : "only_old"
+        this.get_search(keyword, disableOld ? "" : oldFlag, "", (data) => {
             if(!data) {
                 callback("", "")
                 return;
@@ -763,6 +817,18 @@ module.exports = {
             // no dates
             resultSyntax = "before:2010-04-01"
         }
+
+        // adaptive_old - current day/month but only_old year
+        if(flags.includes("adaptive_old")) {
+            if(resultSyntax.includes("before:")) {
+                let year = resultSyntax.split("before:")[1].split("-")[0]
+                let date = new Date()
+                let month = date.getMonth() + 1
+                let day = date.getDate() + 1
+                resultSyntax = `before:${year}-${month}-${day}`
+            }
+        }
+        
         return resultSyntax;
     },
 

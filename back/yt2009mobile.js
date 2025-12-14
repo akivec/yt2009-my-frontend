@@ -13,7 +13,6 @@ const mobileflags = require("./yt2009mobileflags")
 const yt2009_exports = require("./yt2009exports")
 const mobileauths = require("./yt2009mobileauths")
 const yt2009jsongdata = require("./yt2009jsongdata")
-const env = config.env
 const rtsp_server = `rtsp://${config.ip}:${config.port + 2}/`
 const ffmpeg_process_144 = [
     "ffmpeg",
@@ -34,11 +33,30 @@ const ffmpeg_process_3gp = [
     "-s 176x144",
     "\"$2\""
 ]
+const ffmpeg_process_wmv = [
+    "ffmpeg",
+    "-i \"$1\"",
+    "-b:a 32k",
+    "-b:v 200k",
+    "-s 256x192",
+    "-filter:v fps=17",
+    "-c:v wmv1",
+    "\"$2\""
+]
+const ffmpeg_process_xvid = [
+    "ffmpeg",
+    "-i \"$1\"",
+    "-c:v mpeg4",
+    "-vtag xvid",
+    "-vf scale=640:480",
+    "\"$2\""
+]
 const ffmpeg_stream_mp4 = [
     "ffmpeg",
     "-re -i",
     "\"$1\"",
     "$2",
+    "-pix_fmt yuv420p",
     "-f rtsp",
     "-rtsp_transport udp",
     "$3"
@@ -117,6 +135,39 @@ module.exports = {
             code = code.replace(`yt2009_upload`, data.upload)
             code = code.replace(`yt2009_thumbnail`, `http://i.ytimg.com/vi/${data.id}/hqdefault.jpg`)
 
+            // flash players
+            if(req.headers.cookie
+            && (req.headers.cookie.includes("http_flash_flv")
+            || req.headers.cookie.includes("http_flash_mp4"))) {
+                let flashId = id;
+                if(req.headers.cookie.includes("http_flash_mp4")) {
+                    flashId += "/mp4"
+                }
+                code = code.replace(
+                    `<!--yt2009_flash-->`,
+                    `<div style="text-align:center;">` +
+                    templates.flashObject(
+                        [`/alt-swf/mp.swf`,
+                        `?base_yt_url=${encodeURIComponent(
+                            `http://${config.ip}:${config.port}`
+                        )}`,
+                        `&onFlashError=ytm.onFlashError&allowseekahead=1`,
+                        `&controlssize=10`,
+                        `&videoId=${flashId}`
+                        ].join(""),
+                        330, 278
+                    ) + `</div>`
+                )
+                code = code.replace(
+                    ` id="yt2009-watch-video-link"`,
+                    ` id="yt2009-watch-video-link" style="visibility:hidden;"`
+                )
+                code = code.replace(
+                    ` id="yt2009-video-thumbnail"`,
+                    ` id="yt2009-video-thumbnail" style="display:none;"`
+                )
+            }
+
             // related
             let relatedHTML = ``
             let relatedIndex = 0;
@@ -155,7 +206,6 @@ module.exports = {
     
                 res.send(code)
             }
-            
         }, req.headers["user-agent"], utils.get_used_token(req), false)
     },
 
@@ -207,6 +257,21 @@ module.exports = {
                 )
             }
         })
+
+        if(req.originalUrl.split("/")[1]) {
+            // url override playback method for http
+            // (compatibility with cookieless)
+            let method = req.originalUrl.split("/")[1]
+                            .split("?")[0].split("#")[0]
+            switch(method) {
+                case "http_3gp":
+                case "http_wmv":
+                case "mp4_144":
+                case "http_xvid": {
+                    playback = method;
+                }
+            }
+        }
         
         let taskLookup = {
             "rtsp_mp4": [ffmpeg_process_144, "rtsp", "id-144.mp4"],
@@ -215,7 +280,9 @@ module.exports = {
             "rtsp_3gp_an": [ffmpeg_process_3gp, "mute", "rtsp", "id.3gp"],
             "http_mp4": ["id.mp4"],
             "http_mp4_144": [ffmpeg_process_144, "id-144.mp4"],
-            "http_3gp": [ffmpeg_process_3gp, "id.3gp"]
+            "http_3gp": [ffmpeg_process_3gp, "id.3gp"],
+            "http_wmv": [ffmpeg_process_wmv, "id.wmv"],
+            "http_xvid": [ffmpeg_process_xvid, "id.avi"]
         }
 
         let tasks = taskLookup[playback]
@@ -240,16 +307,26 @@ module.exports = {
                 this.processTask(id, tasks, index + 1, res, callback)
                 return;
             }
-            let command = task.join(" ")
-                          .replace("$1", baseFile)
-                          .replace("$2", output)
-            child_process.exec(command, (err, stdout, stderr) => {
-                // go with the next task
-                if(!tasks[index + 1]) return;
-                this.processTask(id, tasks, index + 1, res, callback)
-                return;
-            })
-            taskFilled = true
+            let t = this;
+            function onCanPerformTask() {
+                let command = task.join(" ")
+                              .replace("$1", baseFile)
+                              .replace("$2", output)
+                child_process.exec(command, (err, stdout, stderr) => {
+                    // go with the next task
+                    if(!tasks[index + 1]) return;
+                    t.processTask(id, tasks, index + 1, res, callback)
+                    return;
+                })
+                taskFilled = true
+            }
+            if(fs.existsSync(baseFile)) {
+                onCanPerformTask()
+            } else {
+                utils.saveMp4(id, () => {
+                    onCanPerformTask()
+                })
+            }
         }
         if(task == "rtsp") {
             // rtsp setup task
@@ -394,11 +471,20 @@ module.exports = {
             "rtsp_3gp_an": "/mobile/create_rtsp?v=" + id + "&3gp=1&muted=1",
             "http_mp4": "/get_video?video_id=" + id + "/mp4",
             "http_mp4_144": "/mp4_144?v=" + id,
-            "http_3gp": "/http_3gp?v=" + id
+            "http_3gp": "/http_3gp?v=" + id,
+            "http_wmv": "/http_wmv?v=" + id,
+            "http_xvid": "/http_xvid?v=" + id,
+            "http_flash_flv": "/mobile/watch?v=" + id,
+            "http_flash_mp4": "/mobile/watch?v=" + id
         }
 
         if(linkLookup[playback]) {
             link = linkLookup[playback]
+            if(playback == "http_mp4" && config.trusted_context) {
+                link += "&" + require("./yt2009trustedcontext").generateContext(
+                    id, "PLAYBACK_STD", false
+                )
+            }
         }
 
         return link;
@@ -505,6 +591,32 @@ module.exports = {
                                .split("\"")[0];
             mobileflags.write_session(req.ip, deviceId)
         }
+        // rewrite urls of standardfeeds for very old android vers
+        if(req.headers["user-agent"]
+        && req.headers["user-agent"].includes("Android-YouTube/1.1")) {
+            let endpoint = req.originalUrl.split("?")[0].split("#")[0]
+            endpoint = endpoint.split("/")
+            endpoint = endpoint[endpoint.length - 1]
+            /*if(config.env == "dev") {
+                console.log(req.originalUrl)
+            }*/
+            switch(endpoint.toLowerCase()) {
+                case "most_viewed":
+                case "top_rated": {
+                    req.originalUrl = req.originalUrl.replace(
+                        endpoint, "most_popular"
+                    )
+                    break;
+                }
+                case "most_discussed":
+                case "most_recent": {
+                    req.originalUrl = req.originalUrl.replace(
+                        endpoint, "recently_featured"
+                    )
+                    break;
+                }
+            }
+        }
         // handle category feeds in a separate function
         if(req.originalUrl.includes("most_viewed_")
         || req.originalUrl.includes("most_discussed_")
@@ -516,15 +628,15 @@ module.exports = {
         }
         // default feeds
         let start = parseInt(req.query["start-index"] || 1)
-        if(start < 0 || isNaN(start)) {
+        if(start < 0 || isNaN(start) || start == 1) {
             start = 0;
         }
         let max = parseInt(req.query["max-results"] || 25)
         if(max < 0 || isNaN(max)) {
             max = start + 25
         }
-        if(max > 1000) {
-            max = 1000
+        if(max > 100) {
+            max = 100
         }
         if(req.originalUrl.includes("featured")
         || (req.originalUrl.includes("most_discussed")
@@ -536,6 +648,10 @@ module.exports = {
                            .split(">1<").join(`>${start}<`)
             let videosAdded = 0;
             let vids = yt2009html.featured().slice(start, start + max)
+            if(req.query.alt == "json") {
+                yt2009jsongdata.standardfeed(vids, res, req.query.callback)
+                return;
+            }
             vids.forEach(video => {
                 yt2009html.fetch_video_data(video.id, (data) => {
                     let authorName = utils.asciify(video.uploaderName)
@@ -548,12 +664,13 @@ module.exports = {
                         video.author_handle || utils.asciify(authorName),
                         utils.bareCount(video.views),
                         utils.time_to_seconds(data.length || 0),
-                        data.description,
+                        (!req.light ? data.description : ""),
                         data.upload,
                         (data.tags || []).join(),
                         data.category,
                         mobileflags.get_flags(req).watch,
-                        data.qualities
+                        data.qualities,
+                        {"authorId": data.author_id, "omitY9": true}
                     )
                     videosAdded++;
                     if(videosAdded >= vids.length) {
@@ -564,6 +681,11 @@ module.exports = {
                 }, "", "", false, false, true)
             })
             response = response.split(">25<").join(`>${videosAdded}<`)
+            if(vids.length == 0) {
+                response += templates.gdata_feedEnd
+                res.set("content-type", "application/atom+xml")
+                res.send(response)
+            }
         } else if(req.originalUrl.includes("most_popular")) {
             // grab popular videos (100k+ views) from featured 25-50
             // and put them into the feed
@@ -573,6 +695,12 @@ module.exports = {
             let indexes = [start, start + max]
             if(yt2009html.featured().length > 70) {
                 indexes = [start + 25, start + 25 + max]
+            }
+            if(req.query.alt == "json") {
+                yt2009jsongdata.standardfeed(
+                    yt2009html.featured().slice(indexes[0], indexes[1]), res
+                )
+                return;
             }
             yt2009html.featured().slice(indexes[0], indexes[1]).forEach(video => {
                 yt2009html.fetch_video_data(video.id, (data) => {
@@ -584,12 +712,13 @@ module.exports = {
                             || utils.asciify(video.uploaderName),
                             utils.bareCount(video.views),
                             utils.time_to_seconds(data.length || 0),
-                            data.description,
+                            (!req.light ? data.description : ""),
                             data.upload,
                             (data.tags || []).join(),
                             data.category,
                             mobileflags.get_flags(req).watch,
-                            data.qualities
+                            data.qualities,
+                            {"authorId": data.author_id, "omitY9": true}
                         )
                         videosAdded++
                     }
@@ -601,6 +730,10 @@ module.exports = {
             res.send(response)
         } else {
             // send empty video feeds on other requests
+            if(req.query.alt == "json") {
+                yt2009jsongdata.standardfeed([], res)
+                return;
+            }
             res.set("content-type", "application/atom+xml")
             res.send(
                 templates.gdata_feedStart.split(">25<").join(">0<")
@@ -612,9 +745,17 @@ module.exports = {
     // apk videos
     "videoData": function(req, res) {
         if(!mobileauths.isAuthorized(req, res, "single")) return;
+        if(req.query.alt == "json") {
+            yt2009jsongdata.video(req, res)
+            return;
+        }
         let id = req.originalUrl.split("/videos/")[1]
                                 .split("?")[0]
                                 .split("#")[0]
+        if(id == "12345678911" && fs.existsSync("./yt2009mobilehelper.js")) {
+            require("./yt2009mobilehelper").outsourceBareVideo(req, res)
+            return;
+        }
         yt2009html.fetch_video_data(id, (data) => {
             if(!data.title) {
                 res.sendStatus(404)
@@ -634,7 +775,8 @@ module.exports = {
                 (data.tags || []).join(),
                 data.category,
                 "",
-                data.qualities
+                data.qualities,
+                {"authorId": data.author_id, "omitY9": true}
             )
             res.set("content-type", "application/atom+xml")
             res.send(response)
@@ -648,6 +790,68 @@ module.exports = {
         let id = req.originalUrl.split("/videos/")[1]
                                 .split("/related")[0];
         yt2009html.fetch_video_data(id, (data) => {
+            let response = templates.gdata_feedStart
+            let relCopy = JSON.parse(JSON.stringify(data.related))
+
+            // flags
+            let passFlags = "only_old"
+            let flags = mobileflags.get_flags(req).watch
+            if(flags.includes("new-related")) {
+                passFlags = passFlags.replace("only_old", "")
+            }
+
+            // innertube_related - discard any other algorithm work
+            if(flags.includes("innertube-related")) {
+                let fetchesRequired = 0;
+                let fetchesCompleted = 0;
+
+                let ids = []
+                data.related.forEach(video => {
+                    ids.push(video.id)
+                })
+
+                relCopy = []
+                let rawData = JSON.parse(JSON.stringify(data.related))
+
+                for (let i = 0; i < rawData.length; i++) {
+                    rawData[i].type = "video"
+                    rawData[i].time = rawData[i].length
+                    rawData[i].author_handle = rawData[i].creatorHandle
+                    rawData[i].author_name = rawData[i].creatorName
+                }
+
+                let requestedData = ["publishedAt"]
+
+                if(config.data_api_key) {
+                    fetchesRequired++
+                    utils.dataApiBulk(ids, requestedData, (apidata) => {
+                        for(let id in apidata) {
+                            let videoData = apidata[id]
+                            let rel = rawData.filter(s => {
+                                return s.id == id
+                            })[0]
+                            let i = rawData.indexOf(rel)
+                            if(i !== null && i !== undefined && i >= 0) {
+                                rawData[i].upload = videoData.publishedAt
+                                rawData[i].dataApi = true;
+                            }
+                        }
+                        fetchesCompleted++
+                        if(fetchesCompleted >= fetchesRequired) {
+                            createResponse(rawData)
+                        }
+                    })
+                }
+
+                if(fetchesCompleted >= fetchesRequired) {
+                    setTimeout(() => {
+                        createResponse(rawData)
+                    }, 50)
+                }
+
+                return;
+            }
+
             // exp_related keyword
             let lookup_keyword = ""
             // tags
@@ -662,21 +866,99 @@ module.exports = {
             if(lookup_keyword.length < 9) {
                 lookup_keyword = data.title.split(" ")[0]
             }
-            // flags
-            let passFlags = "only_old"
-            let flags = mobileflags.get_flags(req).watch
-            if(flags.includes("new-related")) {
-                passFlags = passFlags.replace("only_old", "")
-            }
 
-            // actual related search
-            let response = templates.gdata_feedStart
+            // actual related search && data api fetch if possible
             ytsearch.get_search(lookup_keyword, passFlags, "", (rawData => {
+                // add data api for precise upload dates
+                let fetchesRequired = 0;
+                let fetchesCompleted = 0;
+                if(config.data_api_key) {
+                    fetchesRequired++
+
+                    let ids = []
+                    let idSources = {
+                        "exp": [],
+                        "it": []
+                    }
+                    rawData.forEach(video => {
+                        if(video.type !== "video") return;
+                        ids.push(video.id)
+                        idSources.exp.push(video.id)
+                    })
+
+                    // also add bottom related to id list
+                    data.related.forEach(video => {
+                        if(video.uploaded
+                        && parseInt(video.uploaded.split(" ")[0]) >= 12
+                        && video.uploaded.includes("years")
+                        && !ids.includes(video.id)) {
+                            ids.push(video.id)
+                            idSources.it.push(video.id)
+                        }
+                    })
+
+                    let requestedData = ["publishedAt"]
+
+                    utils.dataApiBulk(ids, requestedData, (apidata) => {
+                        for(let id in apidata) {
+                            let videoData = apidata[id]
+                            if(idSources.exp.includes(id)) {
+                                let rel = rawData.filter(s => {
+                                    return s.id == id
+                                })[0]
+                                let i = rawData.indexOf(rel)
+                                if(i !== null && i !== undefined && i >= 0) {
+                                    rawData[i].upload = videoData.publishedAt
+                                    rawData[i].dataApi = true;
+                                }
+                            } else if(idSources.it.includes(id)) {
+                                let rel = relCopy.filter(s => {
+                                    return s.id == id
+                                })[0]
+                                let i = relCopy.indexOf(rel)
+                                if(i !== null && i !== undefined && i >= 0) {
+                                    relCopy[i].upload = videoData.publishedAt
+                                    relCopy[i].dataApi = true;
+                                }
+                            }
+                        }
+                        fetchesCompleted++
+                        if(fetchesCompleted >= fetchesRequired) {
+                            createResponse(rawData)
+                        }
+                    })
+                }
+
+                if(fetchesCompleted >= fetchesRequired) {
+                    createResponse(rawData)
+                }
+            }), "", false)
+
+            // create response
+            function createResponse(rawData) {
                 // add search videos
                 rawData.forEach(video => {
-                    if(video.type !== "video") return;
-                    if(utils.time_to_seconds(video.time) >= 600) return;
+                    if(video.type !== "video"
+                    || utils.time_to_seconds(video.time) >= 600
+                    || response.includes(video.id) || video.id == id
+                    || !video.uploaded) return;
                     let cacheData = yt2009html.get_cache_video(video.id)
+
+                    let uploadDate = cacheData.upload
+                    if(!uploadDate && video.dataApi) {
+                        uploadDate = video.upload
+                    } else if(!uploadDate && !video.dataApi) {
+                        uploadDate = utils.relativeToAbsoluteApprox(video.uploaded)
+                    }
+
+                    let authorId = false;
+                    if(video.creatorUrl
+                    && video.creatorUrl.startsWith("/channel/")) {
+                        authorId = video.creatorUrl.split("/channel/")[1]
+                    } else if(video.author_url
+                    && video.author_url.startsWith("/channel/")) {
+                        authorId = video.author_url.split("/channel/")[1]
+                    }
 
                     response += templates.gdata_feedVideo(
                         video.id,
@@ -685,20 +967,36 @@ module.exports = {
                         utils.bareCount(video.views),
                         utils.time_to_seconds(video.time),
                         cacheData.description || video.description || "-",
-                        utils.relativeToAbsoluteApprox(video.upload),
+                        uploadDate,
                         (cacheData.tags || []).join() || "-",
                         cacheData.category || "-",
-                        mobileflags.get_flags(req).watch
+                        mobileflags.get_flags(req).watch,
+                        null,
+                        {"authorId": authorId, "omitY9": true}
                     )
                 })
 
-
                 // add old default related videos
-                data.related.forEach(video => {
-                    if(parseInt(video.uploaded.split(" ")[0]) >= 12
+                relCopy.forEach(video => {
+                    if(video.uploaded
+                    && parseInt(video.uploaded.split(" ")[0]) >= 12
                     && video.uploaded.includes("years")
                     && video.id !== id
                     && !response.includes(video.id)) {
+
+                        let uploadDate = utils.relativeToAbsoluteApprox(
+                            video.uploaded
+                        )
+                        if(video.dataApi && video.upload) {
+                            uploadDate = video.upload
+                        }
+
+                        let authorId = false;
+                        if(video.creatorUrl
+                        && video.creatorUrl.startsWith("/channel/")) {
+                            authorId = video.creatorUrl.split("/channel/")[1]
+                        }
+
                         //let data = yt2009html.get_cache_video(video.id)
                         // only 12 years or older & no repeats
                         response += templates.gdata_feedVideo(
@@ -708,7 +1006,9 @@ module.exports = {
                             utils.bareCount(video.views),
                             utils.time_to_seconds(video.length),
                             yt2009html.get_video_description(video.id),
-                            utils.relativeToAbsoluteApprox(video.uploaded)
+                            uploadDate,
+                            undefined, undefined, undefined, undefined,
+                            {"authorId": authorId, "omitY9": true}
                         )
                     }
                 })
@@ -716,12 +1016,12 @@ module.exports = {
                 response += templates.gdata_feedEnd
                 res.set("content-type", "application/atom+xml")
                 res.send(response)
-            }), "", false)
+            }
         }, "", "", false, false, true)
     },
 
     // apk video comments
-    "apkVideoComments": function(req, res) {
+    "apkVideoComments": function(req, res, useMobileHelper) {
         if(!mobileauths.isAuthorized(req, res)) return;
         let id = req.originalUrl.split("/videos/")[1]
                                 .split("/comments")[0]
@@ -736,6 +1036,19 @@ module.exports = {
                         utils.asciify(c.author),
                         c.text.replace(/\p{Other_Symbol}/gui, ""),
                         c.time
+                    )
+                })
+            }
+            if(useMobileHelper) {
+                let comments = require("./yt2009mobilehelper")
+                               .pullCommentsByUser(req);
+                comments = comments.filter(s => s.video == id)
+                comments.forEach(c => {
+                    response += templates.gdata_feedComment(
+                        c.video,
+                        c.name,
+                        c.content,
+                        c.date
                     )
                 })
             }
@@ -799,24 +1112,36 @@ module.exports = {
         "headers": {"cookie": ""},
         "query": {"f": 0}}, 
         {"send": function(data) {
+
+            if(req.query.alt == "json") {
+                yt2009jsongdata.userData(data, res, req.query.callback)
+                return;
+            }
+
             let videoViewCount = 0;
             (data.videos || []).forEach(video => {
                 videoViewCount += utils.bareCount(video.views)
             })
 
+            let waitForVCount = false;
+
             let videoCount = (data.videos || []).length
-            if(flags.includes("uploads-count") && videoCount >= 30) {
-                // try to get exact video count if flag enabled
-                if(data.videoCount) {
-                    videoCount = data.videoCount
-                } else {
-                    channels.fill_videocount(path, (count) => {
-                        if(count !== "") {
-                            videoCount = count;
-                        }
-                    })
-                }
+            if(videoCount >= 30) {
+                // try to get exact video count
+                waitForVCount = true;
+                channels.fill_videocount(path, (count) => {
+                    if(count !== "") {
+                        videoCount = count;
+                        sendData();
+                    }
+                })
             }
+
+            let user = utils.xss(data.name)
+            if(!user) {
+                user = data.handle || data.id
+            }
+            user = user.split("&").join("&amp;").split("'").join("")
 
             let subcount = data.properties
                         && data.properties.subscribers
@@ -825,16 +1150,19 @@ module.exports = {
 
             let channelViewCount = Math.floor(videoViewCount / 90)
             res.set("content-type", "application/atom+xml")
-            res.send(templates.gdata_user(
-                id,
-                utils.asciify(data.name || id),
-                `http://${config.ip}:${config.port}/${data.avatar}`,
-                subcount,
-                videoCount,
-                channelViewCount,
-                videoViewCount,
-                flags
-            ))
+            function sendData() {
+                res.send(templates.gdata_user(
+                    id,
+                    user,
+                    `http://${config.ip}:${config.port}/${data.avatar}`,
+                    subcount,
+                    videoCount,
+                    channelViewCount,
+                    videoViewCount,
+                    flags
+                ))
+            }
+            if(!waitForVCount) {sendData();}
         }}, "", true)
     },
 
@@ -851,31 +1179,91 @@ module.exports = {
         "headers": {"cookie": ""},
         "query": {"f": 0}}, 
         {"send": function(data) {
+
+            if(req.query.alt == "json") {
+                yt2009jsongdata.userVideos(data, res, req.query.callback)
+                return;
+            }
+
             let response = templates.gdata_feedStart;
 
-            (data.videos || []).forEach(video => {
-                let cacheVideo = yt2009html.get_cache_video(video.id)
-                
-                response += templates.gdata_feedVideo(
-                    video.id,
-                    video.title,
-                    utils.asciify(data.name),
-                    utils.bareCount(video.views),
-                    utils.time_to_seconds(
-                        video.length
-                    ||  Math.floor(Math.random() * 240) + 60
-                    ),
-                    yt2009html.get_video_description(video.id),
-                    utils.relativeToAbsoluteApprox(video.upload),
-                    (cacheVideo.tags || []).join() || "-",
-                    cacheVideo.category || "-",
-                    mobileflags.get_flags(req).watch
-                )
-            })
+            let videosSource = (data.videos || [])
+            videosSource = videosSource.filter(s => {return !(
+                s.badges
+                && s.badges.includes("BADGE_STYLE_TYPE_MEMBERS_ONLY")
+            )})
 
-            response += templates.gdata_feedEnd;
-            res.set("content-type", "application/atom+xml")
-            res.send(response)
+            function buildFeed() {
+                videosSource.forEach(video => {
+                    let cacheVideo = yt2009html.get_cache_video(video.id)
+                    let user = data.handle ? data.handle.replace("@", "")
+                             : (data.id ? data.id : utils.asciify(data.name))
+
+                    let upload = utils.relativeToAbsoluteApprox(video.upload)
+                    let description = yt2009html.get_video_description(video.id)
+                    if(video.dataApi) {
+                        upload = video.upload;
+                        description = video.description;
+                    }
+    
+                    response += templates.gdata_feedVideo(
+                        video.id,
+                        video.title,
+                        user,
+                        utils.bareCount(video.views),
+                        utils.time_to_seconds(
+                            video.length
+                        ||  Math.floor(Math.random() * 240) + 60
+                        ),
+                        description,
+                        upload,
+                        (cacheVideo.tags || []).join() || "-",
+                        cacheVideo.category || "-",
+                        mobileflags.get_flags(req).watch,
+                        undefined,
+                        {"authorId": data.id, "omitY9": true}
+                    )
+                })
+
+                response += templates.gdata_feedEnd;
+                res.set("content-type", "application/atom+xml")
+                res.send(response)
+            }
+
+            let fetchesRequired = 0;
+            let fetchesCompleted = 0;
+
+            if(config.data_api_key) {
+                fetchesRequired++
+
+                let videoIds = []
+                videosSource.forEach(v => {
+                    videoIds.push(v.id)
+                })
+                let requestedParts = ["publishedAt", "description"]
+                utils.dataApiBulk(videoIds, requestedParts, (apidata) => {
+                    for(let id in apidata) {
+                        let videoData = apidata[id]
+                        let rel = videosSource.filter(s => {
+                            return s.id == id
+                        })[0]
+                        let i = videosSource.indexOf(rel)
+                        if(i !== null && i !== undefined && i >= 0) {
+                            videosSource[i].upload = videoData.publishedAt
+                            videosSource[i].description = videoData.description
+                            videosSource[i].dataApi = true;
+                        }
+                    }
+                    fetchesCompleted++
+                    if(fetchesCompleted >= fetchesRequired) {
+                        buildFeed()
+                    }
+                })
+            }
+
+            if(fetchesCompleted >= fetchesRequired) {
+                buildFeed()
+            }
         }}, "", true)
     },
 
@@ -896,6 +1284,16 @@ module.exports = {
                 channels.get_additional_sections(data, "", () => {
                     let response = templates.gdata_feedStart
                     let playlists = channels.get_cache.read("playlist")
+
+                    if(req.query.alt == "json") {
+                        yt2009jsongdata.userPlaylists(
+                            playlists[data.id] || [],
+                            res, req.query.callback,
+                            data.name, data.id
+                        )
+                        return;
+                    }
+
                     if(playlists[data.id]) {
                         playlists[data.id].forEach(playlist => {
                             response += templates.gdata_playlistEntry(
@@ -912,7 +1310,7 @@ module.exports = {
                     res.send(response)
                 })
             }}, "", true)
-        }, 4000)
+        }, 1000)
     },
 
     // apk user favorites
@@ -929,6 +1327,44 @@ module.exports = {
             "headers": {"cookie": ""},
             "query": {"f": 0}}, 
             {"send": function(data) {
+                function pullFavoritesPlaylist(playlist) {
+                    yt2009playlists.parsePlaylist(playlist.id, (data => {
+                        // add videos (kinda limited data but workable)
+                        let response = templates.gdata_feedStart
+
+                        if(req.query.alt == "json") {
+                            yt2009jsongdata.playlistVideos(
+                                data.videos, res, req.query.callback
+                            )
+                            return;
+                        }
+
+                        data.videos.forEach(video => {
+                            let videoCache = yt2009html.get_cache_video(video.id)
+                            response += templates.gdata_feedVideo(
+                                video.id,
+                                video.title,
+                                utils.asciify(video.uploaderName),
+                                utils.bareCount(
+                                    videoCache.viewCount || Math.floor(
+                                        Math.random() * 20000000
+                                    ).toString()
+                                ),
+                                videoCache.length
+                                || Math.floor(Math.random() * 300),
+                                "", "",
+                                undefined, undefined, undefined, undefined,
+                                {"authorId": data.id, "omitY9": true}
+                            )
+                        })
+        
+                        // send response
+                        response += templates.gdata_feedEnd;
+                        res.set("content-type", "application/atom+xml")
+                        res.send(response)
+                    })) 
+                } 
+
                 channels.get_additional_sections(data, "", () => {
                     let response = templates.gdata_feedStart
                     let playlists = channels.get_cache.read("playlist")
@@ -937,38 +1373,16 @@ module.exports = {
                         playlists[data.id].forEach(playlist => {
                             if(playlist.name == "Favorites") {
                                 hasFavoritesPlaylist = true;
-                                yt2009playlists.parsePlaylist(playlist.id, (data => {
-                                    // add videos (kinda limited data but workable)
-                                    data.videos.forEach(video => {
-                                        let videoCache = yt2009html
-                                                        .get_cache_video(video.id)
-                                        response += templates.gdata_feedVideo(
-                                            video.id,
-                                            video.title,
-                                            utils.asciify(video.uploaderName),
-                                            utils.bareCount(
-                                                videoCache.viewCount
-                                                || Math.floor(
-                                                    Math.random() * 20000000
-                                                ).toString()
-                                            ),
-                                            videoCache.length
-                                            || Math.floor(Math.random() * 300),
-                                            "",
-                                            ""
-                                        )
-                                    })
-        
-                                    // send response
-                                    response += templates.gdata_feedEnd;
-                                    res.set("content-type", "application/atom+xml")
-                                    res.send(response)
-                                })) 
+                                pullFavoritesPlaylist(playlist)
                             }
                         })
                     }
                     if(!hasFavoritesPlaylist) {
                         // no favorites playlist, send empty feed
+                        if(req.query.alt == "json") {
+                            yt2009jsongdata.sendEmptyFeed(res, req.query.callback)
+                            return;
+                        }
                         response += templates.gdata_feedEnd;
                         res.set("content-type", "application/atom+xml")
                         res.send(response)
@@ -976,7 +1390,7 @@ module.exports = {
                     }
                 })
             }}, "", true)
-        }, 4000)
+        }, 1000)
     },
 
     // apk events
@@ -1003,21 +1417,63 @@ module.exports = {
         }, {
             "send": function(data) {
                 // anyway, we got videos to throw there
-                let response = templates.gdata_feedStart
-                data.videos.slice(0, 7).forEach(video => {
-                    response += templates.gdata_activityEntry(
-                        "video_uploaded",
-                        req.query.author,
-                        video.title,
-                        video.id,
-                        utils.relativeToAbsoluteApprox(video.upload),
-                        video.time,
-                        video.views
-                    )
-                })
-                response += templates.gdata_feedEnd
-                res.set("content-type", "application/atom+xml")
-                res.send(response)
+                let fetchesRequired = 0;
+                let fetchesCompleted = 0;
+
+                function buildResponse() {
+                    let response = templates.gdata_feedStart
+                    data.videos.slice(0, 7).forEach(video => {
+                        let upload = video.upload
+                        if(!video.dataApi) {
+                            upload = utils.relativeToAbsoluteApprox(
+                                video.upload
+                            )
+                        }
+                        response += templates.gdata_activityEntry(
+                            "video_uploaded",
+                            req.query.author,
+                            video.title,
+                            video.id,
+                            upload,
+                            video.time,
+                            video.views
+                        )
+                    })
+                    response += templates.gdata_feedEnd
+                    res.set("content-type", "application/atom+xml")
+                    res.send(response)
+                }
+                
+                if(config.data_api_key) {
+                    fetchesRequired++
+                    let videoIds = []
+                    let requestedParts = ["publishedAt"]
+                    data.videos.slice(0, 7).forEach(v => {
+                        videoIds.push(v.id)
+                    })
+
+                    utils.dataApiBulk(videoIds, requestedParts, (apidata) => {
+                        for(let id in apidata) {
+                            let videoData = apidata[id]
+                            let rel = data.videos.filter(s => {
+                                return s.id == id
+                            })[0]
+                            let i = data.videos.indexOf(rel)
+                            if(i !== null && i !== undefined && i >= 0) {
+                                data.videos[i].upload = videoData.publishedAt
+                                data.videos[i].dataApi = true;
+                            }
+                        }
+                        fetchesCompleted++
+                        if(fetchesCompleted >= fetchesRequired) {
+                            buildResponse()
+                        }
+                    })
+                }
+
+                if(fetchesCompleted >= fetchesRequired) {
+                    buildResponse()
+                }
             }
         }, true)
     },
@@ -1030,6 +1486,14 @@ module.exports = {
         let playlistId = req.originalUrl.split("/playlists/")[1]
                                         .split("?")[0]
         require("./yt2009playlists").parsePlaylist(playlistId, (data) => {
+
+            if(req.query.alt == "json") {
+                yt2009jsongdata.playlistVideos(
+                    data.videos, res, req.query.callback
+                )
+                return;
+            }
+
             let response = templates.gdata_feedStart
             // playlist metadata
             response += templates.gdata_userPlaylistStart(
@@ -1052,6 +1516,13 @@ module.exports = {
                 // have full video data?
                 let videoCacheData = yt2009html.get_cache_video(video.id)
 
+                let authorId = false;
+                if(videoCacheData && videoCacheData.author_id) {
+                    authorId = videoCacheData.author_id
+                } else if(video.uploaderId) {
+                    authorId = video.uploaderId
+                }
+
                 // fill
                 response += templates.gdata_feedVideo(
                     video.id,
@@ -1063,10 +1534,12 @@ module.exports = {
                     ),
                     utils.time_to_seconds(video.time || "2:34"),
                     videoCacheData.description || "",
-                    videoCacheData.upload || "2009",
+                    videoCacheData.upload || "",
                     (videoCacheData.tags || []).join() || "-",
                     videoCacheData.category || "-",
-                    mobileflags.get_flags(req).watch
+                    mobileflags.get_flags(req).watch,
+                    undefined,
+                    {"authorId": authorId, "omitY9": true}
                 )
             })
 
@@ -1091,15 +1564,25 @@ module.exports = {
                 "index": start
             }
         }, "")
+        if(req.query.alt == "json") {
+            yt2009jsongdata.standardfeed(videos, res, req.query.callback)
+            return;
+        }
         let response = templates.gdata_feedStart
                        .split(">1<").join(`>${start}<`)
         let videosAdded = 0;
         videos.forEach(video => {
             let cacheVideo = yt2009html.get_cache_video(video.id)
+
+            let author = cacheVideo.author_handle;
+            if(!author) {
+                author = cacheVideo.author_id
+            }
+
             response += templates.gdata_feedVideo(
                 video.id,
                 video.title,
-                utils.asciify(video.uploaderName),
+                author,
                 utils.bareCount(video.views),
                 utils.time_to_seconds(cacheVideo.length || "2:54"),
                 cacheVideo.description || "",
@@ -1107,7 +1590,8 @@ module.exports = {
                 (cacheVideo.tags || []).join() || "-",
                 cacheVideo.category || "",
                 mobileflags.get_flags(req).watch,
-                cacheVideo.qualities
+                cacheVideo.qualities,
+                {"authorId": cacheVideo.author_id, "omitY9": true}
             )
             videosAdded++
         })
@@ -1233,6 +1717,40 @@ module.exports = {
     "commentCallback": function(msg) {
         if(syncCommentCallbacks[msg.id]) {
             syncCommentCallbacks[msg.id](msg)
+        }
+    },
+
+    "avatarUncrop": function(req, res) {
+        if(!req.query.avatar
+        || !req.query.avatar.startsWith("/assets/")
+        || req.query.avatar.includes("../")) {
+            res.sendStatus(400)
+            return;
+        }
+        let ftype = req.query.avatar.split(".")
+        ftype = ftype[ftype.length - 1]
+        let target = req.query.avatar + "_uncropped." + ftype
+        if(fs.existsSync(target)) {
+            res.setHeader("Content-Type", "image/png")
+            res.send(fs.readFileSync("../assets/" + target))
+        } else if(fs.existsSync("../" + req.query.avatar)) {
+            let start = `${__dirname.split("\\").join("/")}/..`
+            let command = [
+                "magick -size 122x122 xc: ",
+                `-draw "image over 25,25 72,72 '${start}${req.query.avatar}'"`,
+                `"${start}${target}"`
+            ].join(" ")
+            require("child_process").exec(command, (e, so, se) => {
+                if(fs.existsSync("../" + target)) {
+                    res.setHeader("Content-Type", "image/png")
+                    res.send(fs.readFileSync("../" + target))
+                } else {
+                    res.sendStatus(500)
+                }
+            })
+        } else {
+            res.sendStatus(400)
+            return;
         }
     }
 }

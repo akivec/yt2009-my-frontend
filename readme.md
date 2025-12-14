@@ -1,5 +1,5 @@
 # yt2009
-a fairly accurate 2009 youtube frontend.
+a fairly accurate 2009 youtube frontend with account features.
 
 <img src="doc-imgs/ie6-ss.png" width="400">
 <img src="doc-imgs/ie6-ss2.png" width="400">
@@ -8,6 +8,7 @@ a fairly accurate 2009 youtube frontend.
 
 ## setup
 ### if you prefer using docker rather than installing directly, go [here](docker.md) for setup instructions instead
+### if hosting on windows xp, follow [xp specific instructions](windowsxp.md) instead.
 
 - **make sure you have [imagemagick](https://imagemagick.org/) and [ffmpeg](https://ffmpeg.org/) in your PATH.**
 
@@ -23,11 +24,25 @@ afterwards, you can just `cd back` and `node backend.js` to start. no need to re
 
 ---
 
-## optional after-setup steps
+it is highly recommended to add a google data api v3 key to ensure all video data is shown correctly.
 
-- set up an android app by following [apk_setup.md](apk_setup.md)
+you will also be notified about that when starting the frontend without one set.
+
+more info in [config_params.md](config_params.md) / [docker.md](docker.md). obtain a key at https://console.developers.google.com/.
 
 ---
+
+## !! if hosting on windows 7 !!
+
+the last version of node.js supported on windows 7 doesn't support the latest version of express, so you might experience crashes on start.
+
+install an older one to host yt2009 on windows 7:
+
+```
+npm install express@4.17.1
+```
+
+if still facing issues take a look at #243.
 
 ## updating
 
@@ -55,9 +70,12 @@ now that you're in, you can just use it as it is, but there is a bit more you ca
 
 navigate to **/flags** to change settings locally. here, for example, you can set up The Wayback Machine as a video data source. but look through, there is a lot more.
 
-feel free to nav to **/toggle_f** if you've set up flash players as described above to make the frontend work on older browsers, such as ie6.
+feel free to nav to **/toggle_f** to enable flash player support for old browsers, such as ie6.
 
-and just click around! you might find some useful features you didn't expect to work.
+sign in! click on the upload button or go to **/mh_pc_intro** to connect and interact with your **actual** youtube account.
+
+<img src="doc-imgs/signin-hppng.png" width="400">
+<img src="doc-imgs/signin-vidmngr.png" width="400">
 
 ---
 
@@ -66,6 +84,8 @@ and just click around! you might find some useful features you didn't expect to 
 **if you need to reclaim space, look through the assets folder where downloaded files (such as images, videos) are saved and delete ones you need.**
 
 **they will be redownloaded when necessary.**
+
+alternatively, set up auto_maintain as described in yt2009setup to handle this for you.
 
 ---
 

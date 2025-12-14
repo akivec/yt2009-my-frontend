@@ -18,7 +18,7 @@ check_tools.forEach(tool => {
         })
     }
     catch(error) {
-        console.log(tool.split(" ")[0] + " not found!! make sure it is in your path")
+        console.log(tool.split(" ")[0] + " not found!! make sure it is in your PATH")
         console.log("exiting")
         process.exit()
     }
@@ -79,8 +79,12 @@ for(let file in cacheFiles) {
     }
 }
 
-fs.mkdirSync("./back/cache_dir/annotations/")
-fs.mkdirSync("./back/cache_dir/subtitles/")
+if(!fs.existsSync("./back/cache_dir/annotations/")) {
+    fs.mkdirSync("./back/cache_dir/annotations/")
+}
+if(!fs.existsSync("./back/cache_dir/subtitles/")) {
+    fs.mkdirSync("./back/cache_dir/subtitles/")
+}
 
 /*
 =======
@@ -88,7 +92,7 @@ generate innertube data
 =======
 */
 console.log("== generating innertube data")
-let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:102.0) Gecko/20100101 Firefox/102.0"
+let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0"
 if(!config.userAgent) {
     console.log("useragent not found in config, using \"" + ua + "\"")
     console.log("if you wish to use your own user agent,"
@@ -136,7 +140,6 @@ fetch("https://www.youtube.com/", {
         console.log("=== !!! ===")
         console.log("/back/yt2009constants.json was modified to include unique data.")
         console.log("this data may include the used useragent, your ip and others.")
-        console.log("make sure to remove such data if you intend on sharing your copy.")
         setTimeout(function() {
             console.log("=== downloading assets ===")
             downloadFile()

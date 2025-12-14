@@ -1,5 +1,8 @@
 const child_process = require("child_process")
+const fetch = require("node-fetch")
 const fs = require("fs")
+const config = require("./config.json")
+const https = require("https")
 let yt2009_process;
 
 if(!fs.existsSync("./logs/")) {
@@ -7,12 +10,12 @@ if(!fs.existsSync("./logs/")) {
 }
 console.log("logs will be saved to /back/logs/")
 
-if(!fs.existsSync("./tvdata.json")) {
+if(!fs.existsSync("./androiddata.json")) {
     const vids = [
         "evJ6gX1lp2o", "dQw4w9WgXcQ", "jNQXAC9IVRw",
         "yQwPhCI_qO0", "ts2a9cW4nLY"
     ]
-    // test /player fetch to check if we need tv sign in on host
+    // test /player fetch to check if we need android sign in on host
     let rv = vids[Math.floor(Math.random() * vids.length)]
     fetch("https://www.youtube.com/youtubei/v1/player?prettyPrint=false", {
         "credentials": "include",
@@ -32,7 +35,6 @@ if(!fs.existsSync("./tvdata.json")) {
                     "hl": "en",
                     "clientName": "ANDROID",
                     "clientVersion": "19.02.39",
-                    "androidSdkVersion": 34,
                     "mainAppWebInfo": {
                         "graftUrl": "/watch?v=" + rv
                     }

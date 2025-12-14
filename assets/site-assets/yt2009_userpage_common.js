@@ -2,6 +2,8 @@
 // minor changes for now
 // 2023-07-21
 
+// one day.. 2025-03-08
+
 // zmiana strony
 // 2009 style
 function switchPage(num) {
@@ -67,6 +69,16 @@ function viewingHistoryClear() {
 
 // browse subscribed channels
 function switchChannel(element) {
+    // temporarily switch to grid for fetching
+    var usingOtherView = false;
+    if(getCurrentView() !== "grid") {
+        try {
+            usingOtherView = getCurrentView()
+            document.querySelector("#view-toggle .grid").click()
+        }
+        catch(error){}
+    }
+
     var url = element.getAttribute("data-url")
     var username = element.querySelector(".name").innerHTML
 
@@ -98,6 +110,20 @@ function switchChannel(element) {
         videos_element.innerHTML = r.responseText
 
         document.querySelector(".yt2009-sub-header").innerHTML = "<div class=\"pager\"></div><a href=\"" + url + "\"><h2>" + username + "</h2></a>"
+
+        // otherview adapt
+        setTimeout(function() {
+            switch(usingOtherView) {
+                case "expand": {
+                    document.querySelector("#view-toggle .expand").click()
+                    break;
+                }
+                case "list": {
+                    document.querySelector("#view-toggle .list").click()
+                    break;
+                }
+            }
+        }, 250)
     }, false)
 }
 
@@ -134,10 +160,17 @@ if(window.localStorage) {
     switch(path) {
         case "/my_favorites": {
             storageObject = JSON.parse(localStorage.favorites)
+            if(storageObject[0] !== "PCHELPER_MANAGED") {
+                buildList()
+            } else {
+                storageObject = []
+                buildList()
+            }
             break;
         }
         case "/my_history": {
             storageObject = JSON.parse(localStorage.watch_history)
+            buildList()
             break;
         }
         case "/watch_queue":
@@ -151,54 +184,57 @@ if(window.localStorage) {
                 var nv = document.getElementById("novids-template")
                 nv.parentNode.removeChild(nv)
             }
+            buildList()
             break;
         }
     }
 
     // add html
-    if(!document.querySelector(".videos-page-0")) {
-        prepNewPage();
-    }
-
-    var viewPrefix = "Views: "
-    if(window["lsViewStringPrefix"]) {
-        viewPrefix = lsViewStringPrefix
-    }
-
-    storageObject.reverse().forEach(function(video) {
-        if(!video.id) return;
-        if(current_page_item_count >= current_page_items_max) {
-            // create new pages
-            current_page_items_max = 20;
-            current_page_item_count = 0;
+    function buildList() {
+        if(!document.querySelector(".videos-page-0")) {
             prepNewPage();
         }
-        var fullThumbUrl = location.protocol + '//i.ytimg.com/vi/'
-                        + video.id + '/' + thumbUrl
-        if(document.cookie.indexOf("thumbnail_proxy") !== -1) {
-            fullThumbUrl = "/thumb_proxy?v=" + video.id
+    
+        var viewPrefix = "Views: "
+        if(window["lsViewStringPrefix"]) {
+            viewPrefix = lsViewStringPrefix
         }
-
-        document.querySelector(".videos-page-0 td").innerHTML = '\
-    <div class="video" style="float: left; margin: 15px 0 0 0; padding: 10px 0 10px 10px; width: 150px;">\
-        <div style="float: left;">\
+    
+        storageObject.reverse().forEach(function(video) {
+            if(!video.id) return;
+            if(current_page_item_count >= current_page_items_max) {
+                // create new pages
+                current_page_items_max = 20;
+                current_page_item_count = 0;
+                prepNewPage();
+            }
+            var fullThumbUrl = location.protocol + '//i.ytimg.com/vi/'
+                            + video.id + '/' + thumbUrl
+            if(document.cookie.indexOf("thumbnail_proxy") !== -1) {
+                fullThumbUrl = "/thumb_proxy?v=" + video.id
+            }
+    
+            document.querySelector(".videos-page-0 td").innerHTML = '\
+        <div class="video" style="float: left; margin: 15px 0 0 0; padding: 10px 0 10px 10px; width: 150px;">\
             <div style="float: left;">\
-                <input type="checkbox" class="checkbox" value="' + video.id + '" />\
+                <div style="float: left;">\
+                    <input type="checkbox" class="checkbox" value="' + video.id + '" />\
+                </div>\
             </div>\
-        </div>\
-        <div style="float: left; width: 120px;">\
-            <a href="/watch?v=' + video.id + '" class="video-thumb"><img src="' + fullThumbUrl + '"/></a>\
-            <a href="/watch?v=' + video.id + '" class="title" style="display: block; color: #03c;">' + video.title + '</a>\
-            <div class="video-stats">\
-                <div class="video-stat' + (path == "/watch_queue" ? " hid" : "") + '"><span class="stat-views">' + viewPrefix + video.views + '</span></div>\
-                <div class="video-stat"><span class="stat-rating"><img class="yt-rating-5.0" src="/assets/site-assets/pixel-vfl73.gif" alt="5.0" /></span></div>\
+            <div style="float: left; width: 120px;">\
+                <a href="/watch?v=' + video.id + '" class="video-thumb"><img src="' + fullThumbUrl + '"/></a>\
+                <a href="/watch?v=' + video.id + '" class="title" style="display: block; color: #03c;">' + video.title + '</a>\
+                <div class="video-stats">\
+                    ' + (video.views ? '<div class="video-stat' + (path == "/watch_queue" ? " hid" : "") + '"><span class="stat-views">' + viewPrefix + video.views + '</span></div>' : '') + '\
+                    <div class="video-stat"><span class="stat-rating"><img class="yt-rating-5.0" src="/assets/site-assets/pixel-vfl73.gif" alt="5.0" /></span></div>\
+                </div>\
             </div>\
-        </div>\
-    </div>' + document.querySelector(".videos-page-0 td").innerHTML
-        current_page_item_count++;
-    })
-
-    localStoragePagingPatch()
+        </div>' + document.querySelector(".videos-page-0 td").innerHTML
+            current_page_item_count++;
+        })
+    
+        localStoragePagingPatch()
+    }
 }
 
 // new page
@@ -348,6 +384,9 @@ function playlists_handle() {
         document.querySelector(".subfolder").className = "subfolder selected"
         show_playlist_localstorage(document.querySelector(".subfolder"))
     }
+
+    // list/grid switchr
+    playlistsViewSwitchrs()
 }
 
 // switch playlist
@@ -356,73 +395,135 @@ function show_playlist_localstorage(playlist) {
     document.querySelector(".subfolder.selected").className = "subfolder"
     playlist.className = "subfolder selected"
 
-    // render videos
-    var playlistId = playlist.getAttribute("data-id")
-    var playlistVideos = JSON.parse(localStorage["playlist-" + playlistId])
-    var playlistVideosHTML = ""
-    var playlistVideoIndex = 0;
-
-    var thumbUrl = "hqdefault.jpg"
-    if(document.cookie.indexOf("autogen_thumbnail") !== -1) {
-        thumbUrl = "1.jpg"
+    // temp switch to listview for fetch
+    var switchToGrid = false;
+    if(getCurrentView() == "grid") {
+        switchToGrid = true;
+        document.querySelector("#list-view tbody").innerHTML = ""
+        document.querySelector(".list").click()
     }
 
-    playlistVideos.forEach(function(video) {
-        if(yt2009_used_lang !== "English") {
-            try {
-                var temp = new Date(video.date)
-                var y = temp.getFullYear()
-                var m = temp.getMonth() + 1
-                if(m < 10) {
-                    m = "0" + m
-                }
-                var d = temp.getDate()
-                if(d < 10) {
-                    d = "0" + d
-                }
-                video.date = y + "-" + m + "-" + d
-            }
-            catch(error) {}
+    // render videos
+    var playlistId = playlist.getAttribute("data-id")
+    var playlistVideos = []
+    if(!localStorage["playlist-" + playlistId]) {
+        // most likely youtube playlist, need fetch
+        if(document.cookie
+        && document.cookie.indexOf("pchelper_user") !== -1
+        && document.cookie.indexOf("playlists_sync") !== -1) {
+            // pull playlist as pchelper user in case its privat or smth
+            var r = new XMLHttpRequest();
+            r.open(
+                "GET", 
+                "/pchelper_playlist?playlist=" + playlistId + "&format=modern"
+            )
+            r.send(null)
+            r.addEventListener("load", function(e) {
+                playlistVideos = JSON.parse(r.responseText)
+                onVideosReady()
+            }, false)
+        } else {
+            // this shouldn't ever trigger but it might
+            var r = new XMLHttpRequest();
+            r.open(
+                "GET", 
+                "/nonpch_playlist?playlist=" + playlistId + "&format=modern"
+            )
+            r.send(null)
+            r.addEventListener("load", function(e) {
+                playlistVideos = JSON.parse(r.responseText)
+                onVideosReady()
+            }, false)
         }
-        var fullThumbUrl = location.protocol + '//i.ytimg.com/vi/'
-                            + video.id + '/' + thumbUrl
-        if(document.cookie.indexOf("thumbnail_proxy") !== -1) {
-            fullThumbUrl = "/thumb_proxy?v=" + video.id
-        }
-        playlistVideosHTML += '\
-        <tr class="video ' + (playlistVideoIndex % 2 == 0 ? "even" : "odd") + '" data-videoid="' + video.id + '">\
-            <td id="heading-check" class="first heading">\
-                <div><input id="all-items-checkbox" type="checkbox" onclick="" data-videoid="' + video.id + '"/></div>\
-            </td>\
-            <td id="heading-position" class="heading">\
-                <div style="text-align: center;"><a href="#" style="text-align: center;font-size: 14px;"><b>' + (playlistVideoIndex + 1) + '</b></a></div>\
-            </td>\
-            <td id="heading-title" class="heading">\
-                <button title="" class="master-sprite"></button>\
-                <a href="/watch?v=' + video.id + '" style="height: 40px;overflow: hidden;" rel="nofollow"><img src="' + fullThumbUrl + '"></a>\
-                <a href="/watch?v=' + video.id + '" class="video-title">' + video.title + '</a>\
-            </td>\
-            <td id="heading-time" class="heading">\
-                <div>' + video.time + '</div>\
-            </td>\
-            <td id="heading-date" class="heading">\
-                <div>' + video.date + '</div>\
-            </td>\
-            <td id="heading-views" class="heading">\
-                <div>' + video.viewCount + '</div>\
-            </td>\
-            <td id="heading-rating" class="heading">\
-                <div><div class="video-stat"><span class="stat-rating"><img class="yt-rating-' + video.rating + '" src="/assets/site-assets/pixel-vfl73.gif" alt="' + video.rating + '" /></span></div></div>\
-            </td>\
-        </tr>'
-        playlistVideoIndex++;
-    })
+    } else {
+        playlistVideos = JSON.parse(localStorage["playlist-" + playlistId])
+        onVideosReady()
+    }
+    
+    function onVideosReady() {
+        var playlistVideosHTML = ""
+        var playlistVideoIndex = 0;
 
-    document.querySelector(".yt2009-videos-insert").innerHTML = playlistVideosHTML
+        var thumbUrl = "hqdefault.jpg"
+        if(document.cookie.indexOf("autogen_thumbnail") !== -1) {
+            thumbUrl = "1.jpg"
+        }
+
+        playlistVideos.forEach(function(video) {
+            if(yt2009_used_lang !== "English") {
+                try {
+                    var temp = new Date(video.date)
+                    var y = temp.getFullYear()
+                    var m = temp.getMonth() + 1
+                    if(m < 10) {
+                        m = "0" + m
+                    }
+                    var d = temp.getDate()
+                    if(d < 10) {
+                        d = "0" + d
+                    }
+                    video.date = y + "-" + m + "-" + d
+                }
+                catch(error) {}
+            }
+            var fullThumbUrl = location.protocol + '//i.ytimg.com/vi/'
+                                + video.id + '/' + thumbUrl
+            if(document.cookie.indexOf("thumbnail_proxy") !== -1) {
+                fullThumbUrl = "/thumb_proxy?v=" + video.id
+            }
+            playlistVideosHTML += '\
+            <tr class="video ' + (playlistVideoIndex % 2 == 0 ? "even" : "odd") + '" data-videoid="' + video.id + '">\
+                <td id="heading-check" class="first heading">\
+                    <div><input id="all-items-checkbox" type="checkbox" onclick="" data-videoid="' + video.id + '"/></div>\
+                </td>\
+                <td id="heading-position" class="heading">\
+                    <div style="text-align: center;"><a href="#" style="text-align: center;font-size: 14px;"><b>' + (playlistVideoIndex + 1) + '</b></a></div>\
+                </td>\
+                <td id="heading-title" class="heading">\
+                    <button title="" class="master-sprite"></button>\
+                    <a href="/watch?v=' + video.id + '" style="height: 40px;overflow: hidden;" rel="nofollow"><img src="' + fullThumbUrl + '"></a>\
+                    <a href="/watch?v=' + video.id + '" class="video-title">' + video.title + '</a>\
+                </td>\
+                <td id="heading-time" class="heading">\
+                    <div>' + video.time + '</div>\
+                </td>\
+                <td id="heading-date" class="heading">\
+                    <div>' + video.date + '</div>\
+                </td>\
+                <td id="heading-views" class="heading">\
+                    <div>' + video.viewCount + '</div>\
+                </td>\
+                <td id="heading-rating" class="heading">\
+                    <div><div class="video-stat"><span class="stat-rating"><img class="yt-rating-' + video.rating + '" src="/assets/site-assets/pixel-vfl73.gif" alt="' + video.rating + '" /></span></div></div>\
+                </td>\
+            </tr>'
+            playlistVideoIndex++;
+        })
+
+        document.querySelector(".yt2009-videos-insert").innerHTML = playlistVideosHTML
+
+        if(switchToGrid) {
+            setTimeout(function() {
+                document.querySelector(".grid").click()
+            }, 100)
+        }
+    }
 }
 
 // play all
 // create a playlist with our videos with the server
+
+var pchelperFavPage = (
+    location.href.indexOf("my_favorites") !== -1
+    && document.cookie
+    && document.cookie.indexOf("playlists_sync") !== -1
+)
+
+var pchelper_global_playlist_id = ""
+if(pchelperFavPage) {
+    pchelper_global_playlist_id = document.getElementById("pchelper-fav-id").innerHTML
+}
+
 if(document.querySelector("#playlist-btn-play")) {
     document.querySelector("#playlist-btn-play")
     .addEventListener("click", function() {
@@ -457,37 +558,74 @@ if(document.querySelector("#playlist-btn-play")) {
     // remove picked video(s) from the playlist
     document.querySelector("#playlist-btn-remove")
             .addEventListener("click", function() {
-        var playlistId = document.querySelector(".subfolder.selected")
-                                .getAttribute("data-id")
+        var playlistId = ""
+        if(!pchelperFavPage) {
+            playlistId = document.querySelector(".subfolder.selected")
+                                 .getAttribute("data-id")
+        } else {
+            playlistId = pchelper_global_playlist_id;
+        }
         var s = document.querySelectorAll('input[type="checkbox"]')
+        var videoQueue = [] //pchelper only
         for(var sel in s) {
             if(s[sel].checked && s[sel].getAttribute("data-videoid")) {
-                var videoElement = {}
-    
-                var playlistVideos = JSON.parse(
-                    localStorage["playlist-" + playlistId]
-                )
-                playlistVideos.forEach(function(video) {
-                    if(video.id == s[sel].getAttribute("data-videoid")) {
-                        videoElement = video;
-                    }
-                })
-    
-                localStorage["playlist-" + playlistId] = localStorage[
-                    "playlist-" + playlistId
-                ].replace(JSON.stringify(videoElement), "")
-    
-                // poprawianie jsona
-                localStorage["playlist-" + playlistId] = localStorage[
-                    "playlist-" + playlistId
-                ].replace("[,", "[").replace(",]", "]")
+                if(document.cookie
+                && document.cookie.indexOf("playlists_sync") !== -1) {
+                    // pchelper -- push to queue
+                    videoQueue.push(s[sel].getAttribute("data-videoid"))
+                } else {
+                    // non-pchelper -- delete as it goes
+                    var videoElement = {}
+                    var playlistVideos = JSON.parse(
+                        localStorage["playlist-" + playlistId]
+                    )
+                    playlistVideos.forEach(function(video) {
+                        if(video.id == s[sel].getAttribute("data-videoid")) {
+                            videoElement = video;
+                        }
+                    })
+        
+                    localStorage["playlist-" + playlistId] = localStorage[
+                        "playlist-" + playlistId
+                    ].replace(JSON.stringify(videoElement), "")
+        
+                    // poprawianie jsona
+                    localStorage["playlist-" + playlistId] = localStorage[
+                        "playlist-" + playlistId
+                    ].replace("[,", "[").replace(",]", "]")
+                }
             }
         }
-    
-        // update the playlist
-        show_playlist_localstorage(
-            document.querySelector(".subfolder.selected")
-        )
+
+        function onDelete() {
+            // update the playlist
+            if(pchelperFavPage) {
+                location.reload()
+                return;
+            }
+
+            show_playlist_localstorage(
+                document.querySelector(".subfolder.selected")
+            )
+        }
+
+        // request delete with pchelper
+        if(videoQueue.length >= 1) {
+            var pchelperRequest = [
+                "method=remove_videos",
+                "playlist_id=" + playlistId,
+                "video_ids=" + videoQueue.join(",")
+            ].join("&")
+
+            var r = new XMLHttpRequest();
+            r.open("POST", "/pchelper_playlists")
+            r.send(pchelperRequest)
+            r.addEventListener("load", function(e) {
+                onDelete()
+            }, false)
+        } else {
+            onDelete()
+        }
     }, false)
 }
 
@@ -507,7 +645,7 @@ function removeSelectedFromQuicklist() {
                 videoIds.push(s[e].querySelector(".checkbox").value)
             }
         }
-        catch(error) {console.log(error)}
+        catch(error) {}
     }
 
     // remove em
@@ -528,10 +666,25 @@ function removeSelectedFromQuicklist() {
 if(document.querySelector("#view-toggle .expand")) {
     document.querySelector("#view-toggle .expand")
             .addEventListener("click", function() {
-        var currentPage = document.querySelector(".videos-page:not(.hid)")
-        var pageIndex = currentPage.className
-                        .split("videos-page-")[1]
-                        .split(" ")[0]
+        var currentPage;
+        var pageIndex = 0;
+        try {
+            currentPage = document.querySelector(".videos-page:not(.hid)")
+            pageIndex = currentPage.className
+                            .split("videos-page-")[1]
+                            .split(" ")[0]
+        }
+        catch(error) {
+            try {
+                currentPage = document.querySelector("#videos")
+                if(document.querySelector("#expand-view tbody")) {
+                    document.querySelector("#expand-view table").removeChild(
+                        document.querySelector("#expand-view tbody")
+                    )
+                }
+            }
+            catch(e) {}
+        }
         // create expand view container if needed
         if(!document.querySelector("#expand-view")) {
             var e = document.createElement("div")
@@ -578,6 +731,10 @@ if(document.querySelector("#view-toggle .expand")) {
 
         // hide other view(s)
         document.querySelector("#grid-view").className += " hid"
+        if(document.querySelector("#list-view")
+        && document.querySelector("#list-view").className.indexOf(" hid") == -1) {
+            document.querySelector("#list-view").className += " hid"
+        }
         var expand = document.querySelector("#expand-view")
         expand.className = expand.className.split("hid").join("")
         document.querySelector("#view-toggle .expand")
@@ -591,18 +748,31 @@ if(document.querySelector("#view-toggle .expand")) {
         var videos = nlToArray(currentPage.querySelectorAll(".video"))
         var videoIds = ""
         videos.forEach(function(v) {
-            videoIds += v.querySelector(".title").href.split("?v=")[1] + ","
+            if(v.querySelector(".title")) {
+                videoIds += v.querySelector(".title").href.split("?v=")[1] + ","
+            } else if(v.querySelector(".video-title")) {
+                videoIds += v.querySelector(".video-title").href.split("?v=")[1] + ","
+            }
         })
 
         // request expand view html for selected page
         var r = new XMLHttpRequest();
-        r.open("GET", "/userpage_expand_view")
+        r.open("GET", "/userpage_view?r=" + Math.random())
         r.setRequestHeader("videos", videoIds)
+        r.setRequestHeader("view", "expand")
         r.send(null)
         r.addEventListener("load", function(e) {
-            document.querySelector(
+            var page = document.querySelector(
                 "#expand-view .videos-page-" + pageIndex
-            ).innerHTML = r.responseText
+            )
+            if(page) {
+                page.innerHTML = r.responseText
+            } else {
+                document.querySelector("#expand-view table").innerHTML = ""
+                var vdata = document.createElement("tbody")
+                vdata.innerHTML = r.responseText
+                document.querySelector("#expand-view table").appendChild(vdata)
+            }
         }, false)
     }, false)
 }
@@ -618,13 +788,108 @@ function expandViewFetchPage(page) {
     })
     if(!page.querySelector(".video")) {
         var r = new XMLHttpRequest();
-        r.open("GET", "/userpage_expand_view")
+        r.open("GET", "/userpage_view?r=" + Math.random())
         r.setRequestHeader("videos", videoIds)
+        r.setRequestHeader("view", "expand")
         r.send(null)
         r.addEventListener("load", function(e) {
             page.innerHTML = r.responseText
         }, false)
     }
+}
+
+// list view if available (unpaged only)
+if(document.querySelector("#view-toggle .list")) {
+    document.querySelector("#view-toggle .list")
+            .addEventListener("click", function() {
+        var currentPage = document.querySelector("#grid-view")
+        var pageIndex = 0;
+        // create expand view container if needed
+        if(!document.querySelector("#list-view")) {
+            var e = document.createElement("div")
+            e.id = "list-view"
+            document.querySelector(".view").appendChild(e)
+
+            // create table as container
+            var table = document.createElement("table")
+            table.id = "table"
+            e.appendChild(table)
+            
+            // create thead and tbody for all pages
+            var thead = document.querySelector("#grid-view thead")
+                                .cloneNode(true)
+            thead.innerHTML = '<tr id="headings"><td id="heading-check" class="first heading"><div><input id="all-items-checkbox" type="checkbox" onclick="if (this.checked == true) { selectAllItems(\'videos\'); } else { deselectAllItems(\'videos\'); };"></div></td><td id="heading-position" class="heading"><div><a href="#">Position</a></div></td><td id="heading-title" class="heading"><div><a href="#">Title</a></div></td><td id="heading-time" class="heading"><div><a href="#">Time</a></div></td><td id="heading-date" class="heading"><div><a href="#">Date Added</a></div></td><td id="heading-views" class="heading"><div><a href="#">Views</a></div></td><td id="heading-rating" class="heading"><div><a href="#">Rating</a></div></td></tr>'
+            table.appendChild(thead)
+
+            var tbody = document.createElement("tbody")
+            tbody.id = "videos"
+            tbody.className = "videos-page videos-page-0"
+            table.appendChild(tbody)
+
+            // tbody tr & td containing videos
+            var tr = document.createElement("tr")
+            tbody.appendChild(tr)
+
+            var td = document.createElement("td")
+            td.setAttribute("colspan", "2")
+            tr.appendChild(td)
+
+            // move footer
+            var footerP = document.querySelector(".view")
+            var footerC = document.querySelector(".view .footer").cloneNode(true)
+            footerP.appendChild(footerC)
+            footerP.removeChild(footerP.querySelector(".footer"))
+        }
+
+        // hide other view(s)
+        document.querySelector("#grid-view").className += " hid"
+        if(document.querySelector("#expand-view")
+        && document.querySelector("#expand-view").className.indexOf(" hid") == -1) {
+            document.querySelector("#expand-view").className += " hid"
+        }
+        var list = document.querySelector("#list-view")
+        list.className = list.className.split("hid").join("")
+        document.querySelector("#view-toggle .list")
+                .className = "list-selected"
+        if(document.querySelector(".grid-selected")) {
+            document.querySelector("#view-toggle .grid-selected")
+                    .className = "grid"
+        }
+        if(document.querySelector(".expand-selected")) {
+            document.querySelector("#view-toggle .expand-selected")
+                    .className = "expand"
+        }
+
+        // get videos to be fetched for a page
+        var videos = nlToArray(currentPage.querySelectorAll(".video"))
+        var videoIds = ""
+        videos.forEach(function(v) {
+            if(v.querySelector(".title")) {
+                videoIds += v.querySelector(".title").href.split("?v=")[1] + ","
+            } else if(v.querySelector(".video-title")) {
+                videoIds += v.querySelector(".video-title").href.split("?v=")[1] + ","
+            }
+        })
+
+        // request expand view html for selected page
+        var r = new XMLHttpRequest();
+        r.open("GET", "/userpage_view?r=" + Math.random())
+        r.setRequestHeader("videos", videoIds)
+        r.setRequestHeader("view", "list")
+        r.send(null)
+        r.addEventListener("load", function(e) {
+            var page = document.querySelector(
+                "#list-view .videos-page-" + pageIndex
+            )
+            if(page) {
+                page.innerHTML = r.responseText
+            } else {
+                var vdata = document.createElement("tbody")
+                vdata.innerHTML = r.responseText
+                document.querySelector("#expand-view table").appendChild(vdata)
+            }
+        }, false)
+    }, false)
 }
 
 // switch back to grid view
@@ -635,23 +900,42 @@ if(document.querySelector("#view-toggle .grid-selected")) {
         var currentView = document.querySelector(
             "#expand-view:not(.hid)"
         )
-        var s = currentView.querySelector(".videos-page:not(.hid)")
-        var currentPage = s.className.split("videos-page-")[1].split(" ")[0]
-        // hide the previously open pages on grid-view
-        // show the needed one
-        nlToArray(
-            document.querySelectorAll("#grid-view .videos-page")
-        ).forEach(function(p) {
-            if(p.className.indexOf("hid") !== -1) return;
-            p.className += " hid"
-        })
+        var s;
+        var currentPage;
+        var targetPage;
+        try {
+            s = currentView.querySelector(".videos-page:not(.hid)")
+            currentPage = s.className.split("videos-page-")[1].split(" ")[0]
+            targetPage = document.querySelector(
+                "#grid-view .videos-page-" + currentPage
+            )
+            // hide the previously open pages on grid-view
+            // show the needed one
+            nlToArray(
+                document.querySelectorAll("#grid-view .videos-page")
+            ).forEach(function(p) {
+                if(p.className.indexOf("hid") !== -1) return;
+                p.className += " hid"
+            })
+        }
+        catch(error) {
+            // unpaged view
+            currentPage = currentView
+            targetPage = document.querySelector("#grid-view")
+        }
 
-        var targetPage = document.querySelector(
-            "#grid-view .videos-page-" + currentPage
-        )
-        targetPage.className = targetPage.className.split("hid").join("")
+        if(targetPage) {
+            targetPage.className = targetPage.className.split("hid").join("")
+        }
         // hide other view(s)
-        document.querySelector("#expand-view").className += " hid"
+        if(document.querySelector("#list-view")
+        && document.querySelector("#list-view").className.indexOf(" hid") == -1) {
+            document.querySelector("#list-view").className += " hid"
+        }
+        if(document.querySelector("#expand-view")
+        && document.querySelector("#expand-view").className.indexOf(" hid") == -1) {
+            document.querySelector("#expand-view").className += " hid"
+        }
         document.querySelector("#grid-view").className = ""
         document.querySelector("#view-toggle .grid")
                 .className = "grid-selected"
@@ -659,12 +943,111 @@ if(document.querySelector("#view-toggle .grid-selected")) {
             document.querySelector("#view-toggle .expand-selected")
                     .className = "expand"
         }
+        if(document.querySelector(".list-selected")) {
+            document.querySelector("#view-toggle .list-selected")
+                    .className = "list"
+        }
 
     }, false)
+}
+
+// using with unpaged: get current view
+function getCurrentView() {
+    try {
+        if(document.getElementById("expand-view").className.indexOf("hid") == -1) {
+            return "expand"
+        }
+    }
+    catch(error){}
+    try{
+        if(document.getElementById("list-view").className.indexOf("hid") == -1) {
+            return "list"
+        }
+    }
+    catch(error){}
+    return "grid"
 }
 
 // ql: no videos notice
 function qlNoVidsShow() {
     document.getElementById("novids-template").id = "videos"
     document.getElementById("videos").className = ""
+}
+
+// my_videos: delete
+function deletePrompt(videoId) {
+    var ans = confirm("Are you sure you want to delete the selected videos?")
+    if(ans) {
+        document.getElementById("video-delete-" + videoId).submit()
+    }
+}
+
+function playlistsViewSwitchrs() {
+    var gridBtn = document.querySelector("#view-toggle .grid")
+    gridBtn.addEventListener("click", function() {
+        // switch to grid view
+        if(getCurrentView() == "list") {
+            var completeIds = []
+            var videoIds = document.querySelectorAll("#list-view .video-title")
+            for(var i in videoIds) {
+                try {
+                    completeIds.push(
+                        videoIds[i].getAttribute("href").split("?v=")[1]
+                    )
+                }
+                catch(error) {
+                    // failed == not a video link
+                }
+            }
+            if(!document.querySelector("#grid-view")) {
+                var g = document.createElement("div")
+                g.id = "grid-view"
+                var t = document.createElement("table")
+                t.id = "table"
+                var th = document.createElement("thead")
+                th.innerHTML = '<tr id="headings"><td id="heading-check" class="first heading"><div><input id="all-items-checkbox" type="checkbox" onclick="if (this.checked == true) { selectAllItems(\'videos\'); } else { deselectAllItems(\'videos\'); };"></div></td><td id="heading-filter" class="heading"><div></div></td></tr>'
+                t.appendChild(th)
+                var tb = document.createElement("tbody")
+                tb.id = "videos"
+                var tr = document.createElement("tr")
+                tb.appendChild(tr)
+                t.appendChild(tb)
+                g.appendChild(t)
+                document.querySelector(".view").appendChild(g)
+            }
+
+            document.querySelector(".list-selected").className = "list"
+            gridBtn.className = "grid-selected"
+            document.getElementById("list-view").className += " hid"
+
+            var c = document.getElementById("grid-view")
+            c.className = c.className.split(" hid").join("")
+            document.querySelector("#grid-view tbody").innerHTML = ""
+
+            var trz = document.createElement("tr")
+            var td = document.createElement("td")
+            td.setAttribute("colspan", "2")
+            trz.appendChild(td)
+            document.querySelector("#grid-view tbody").appendChild(trz)
+
+            var r = new XMLHttpRequest();
+            r.open("GET", "/userpage_view?r=" + Math.random())
+            r.setRequestHeader("videos", completeIds.join(","))
+            r.setRequestHeader("view", "grid")
+            r.send(null)
+            r.addEventListener("load", function(e) {
+                td.innerHTML = r.responseText
+            }, false)
+        }
+    }, false)
+    var listBtn = document.querySelector("#view-toggle .list-selected")
+    listBtn.addEventListener("click", function() {
+        // switch to list view
+        if(getCurrentView() == "grid") {
+            gridBtn.className = "grid"
+            listBtn.className = "list-selected"
+            document.getElementById("list-view").className = ""
+            document.getElementById("grid-view").className += " hid"
+        }
+    }, false)
 }

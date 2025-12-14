@@ -26,33 +26,50 @@ function use_ryd_first_video() {
 // playnav
 function switchVideo(video) {
     playnav_view("play")
-    $(".playnav-video.selected").className = "playnav-item playnav-video"
+
+    var liveVideo = (video.className.indexOf("playnav-live-video") !== -1)
+    
+    var currentIsLive = null;
+    try {
+        var currentIsLive = (
+            document.querySelector(".playnav-video.selected")
+            .className.indexOf("playnav-live-video") !== -1
+        )
+        $(".playnav-video.selected").className = "playnav-item playnav-video" + (currentIsLive ? " playnav-live-video" : "")
+    }
+    catch(error){}
 
     var id = video.id.split("-").splice(2, video.id.split("-").length).join("-")
+
+    var vidUrl = "/embed/" + id
+    if(liveVideo) {
+        vidUrl += "?live=1"
+    }
 
     $("#playnav-curvideo-title").innerHTML = document.querySelector(".video-title-" + id).innerHTML
     $("#playnav-curvideo-info-line").innerHTML = "From: " + $(".yt2009-name").innerHTML + " | " + document.querySelector(".video-meta-" + id).innerHTML.replace(" - ", " | ")
     $("#playnav-curvideo-description").innerHTML = ""
     $("#defaultRatingMessage").innerHTML = "<span class='smallText'>" + document.querySelector(".video-ratings-" + id).innerHTML + " ratings</span>"
-    $("#yt2009_playhead").src = "/embed/" + id;
+    $("#yt2009_playhead").src = vidUrl;
     $("#playnav-watch-link").setAttribute("href", "/watch?v=" + id)
 
     var e = document.querySelectorAll(".playnav-video")
     // wywal .selected z reszty
     for(var sel in e) {
         try {
-            e[sel].className = "playnav-item playnav-video"
+            var vlive = (e[sel].className.indexOf("playnav-live-video") !== -1)
+            e[sel].className = "playnav-item playnav-video" + (vlive ? " playnav-live-video" : "")
         }
-        catch(error) {console.log(error)}
+        catch(error) {}
     }
     // dodaj .selected z powrotem do innych wystąpień tego filmu
     e = document.querySelectorAll("#playnav-video-" + id)
     for(var sel in e) {
-        try {e[sel].className = "playnav-item playnav-video selected playnav-item-selected"}
-        catch(error) {console.log(error)}
+        try {e[sel].className = "playnav-item playnav-video selected playnav-item-selected" + (liveVideo ? " playnav-live-video" : "")}
+        catch(error) {}
     }
 
-    video.className = "playnav-item playnav-video selected playnav-item-selected"
+    video.className = "playnav-item playnav-video selected playnav-item-selected" + (liveVideo ? " playnav-live-video" : "")
 
     // zmień kartę na info
     playnav_switchPanel("info")
@@ -76,6 +93,9 @@ function switchVideo(video) {
             }, false)
         }
     }
+
+    // share tab
+    $("#playnav-panel-share-link").value = "http://youtu.be/" + id
 }
 
 // karty
@@ -170,6 +190,14 @@ function subscribe() {
         sub = encodeURIComponent(location.pathname) + "&" + encodeURIComponent($(".yt2009-name").innerHTML) + ":" + sub;
         document.cookie = "sublist=" + sub + "; Path=/; expires=Fri, 31 Dec 2066 23:59:59 GMT"
     }
+
+    if(document.cookie && document.cookie.indexOf("subscriptions_sync") !== -1) {
+        var reqUser = location.pathname.split("/")
+        reqUser = reqUser[reqUser.length - 1]
+        var r = new XMLHttpRequest();
+        r.open("POST", "/pchelper_subs")
+        r.send("user=" + reqUser)
+    }
 }
 
 // unsub
@@ -216,6 +244,14 @@ function unsubscribe() {
 
         sub = sub.replace(encodeURIComponent(location.pathname) + "&" + encodeURIComponent($(".yt2009-name").innerHTML) + ":", "")
         document.cookie = "sublist=" + sub + "; Path=/; expires=Fri, 31 Dec 2066 23:59:59 GMT"
+    }
+
+    if(document.cookie && document.cookie.indexOf("subscriptions_sync") !== -1) {
+        var reqUser = location.pathname.split("/")
+        reqUser = reqUser[reqUser.length - 1]
+        var r = new XMLHttpRequest();
+        r.open("POST", "/pchelper_subs")
+        r.send("user=" + reqUser + "&state=unsubscribe")
     }
 }
 
@@ -304,6 +340,19 @@ function get_video_comments() {
 // dodawanie
 function favorite_video() {
     var currentId = document.querySelector(".playnav-video.selected").id.replace("playnav-video-", "")
+    if((localStorage && localStorage.favorites
+    && localStorage.favorites.indexOf("PCHELPER_MANAGED") !== -1)
+    || (document.cookie
+    && document.cookie.indexOf("favorites=PCHELPER_MANAGED") !== -1)) {
+        var r = new XMLHttpRequest();
+        r.open("POST", "/pchelper_favorites")
+        r.send("video_id=" + currentId)
+        r.addEventListener("load", function(e) {
+            $(".favorite-remove").className += " hid"
+            $(".favorite-added").className = "favorite-added"
+        }, false)
+        return;
+    }
     var favorites = ""
     if(useLocalStorage) {
         // localstorage
@@ -315,7 +364,8 @@ function favorite_video() {
             favorites.unshift({
                 "id": currentId,
                 "title": document.querySelector(".video-title-" + currentId).innerHTML,
-                "views": document.querySelector(".video-meta-" + currentId).innerHTML.split(" views - ")[0]
+                "views": document.querySelector(".video-meta-" + currentId)
+                         .innerHTML.split(" views - ")[0]
             })
 
             // przy okazji usuń puste entry (usunięte z poziomu ui)
@@ -323,7 +373,12 @@ function favorite_video() {
         }
     } else {
         // cookie
-        var videoString = encodeURIComponent(document.querySelector(".video-title-" + currentId).innerHTML + "&" + document.querySelector(".video-meta-" + currentId).innerHTML.split(" views - ")[0] + "&" + currentId)
+        var videoString = encodeURIComponent(
+            document.querySelector(".video-title-" + currentId).innerHTML
+            + "&" + document.querySelector(".video-meta-" + currentId)
+                    .innerHTML.split(" views - ")[0]
+            + "&" + currentId
+        )
         document.cookie.split(";").forEach(function(cookie) {
             if(cookie.indexOf("favorites=") !== -1) {
                 favorites = cookie.trimLeft().replace("favorites=", "")
@@ -331,7 +386,8 @@ function favorite_video() {
         })
         if(favorites.indexOf(currentId) == -1) {
             favorites = videoString + ":" + favorites
-            document.cookie = "favorites=" + favorites + "; Path=/; expires=Fri, 31 Dec 2066 23:59:59 GMT"
+            document.cookie = "favorites=" + favorites
+                            + "; Path=/; expires=Fri, 31 Dec 2066 23:59:59 GMT"
         }
     }
     $(".favorite-remove").className += " hid"
@@ -484,7 +540,27 @@ function flagVideoSend() {
 
 // dodaj obecny film do playlisty
 function addPlaylistVideo(playlistId) {
-    var currentId = document.querySelector(".playnav-video.selected").id.split("video-")[1]
+    var currentId = document.querySelector(".playnav-video.selected")
+                            .id.split("video-")[1]
+
+    if(document.cookie && document.cookie.indexOf("playlists_sync") !== -1) {
+        // use pchelper for playlists
+        var pchelper_request = [
+            "method=add_existing",
+            "video=" + currentId,
+            "playlist_id=" + playlistId
+        ].join("&")
+        var r = new XMLHttpRequest();
+        r.open("POST", "/pchelper_playlists")
+        r.send(pchelper_request)
+        r.addEventListener("load", function(e) {
+            $("#addToPlaylistResult").style.display = "block"
+            $("#addToPlaylistDiv").style.display = "none"
+        }, false)
+        return;
+    }
+
+    
     var dateAdded = new Date().toString().split(" ")
     dateAdded.shift();
     dateAdded = dateAdded.slice(0, 3)
@@ -519,12 +595,40 @@ function playlistResultBack() {
 
 // event listener: przycisk add na istniejącej playliście
 $("#playlist-add-btn").addEventListener("click", function() {
-    console.log(selectedOption)
     addPlaylistVideo(selectedOption.value);
 }, false)
 
 // event listener: przycisk add na new playlist
 $("#playlist-create-btn").addEventListener("click", function() {
+    if(document.cookie && document.cookie.indexOf("playlists_sync") !== -1) {
+        var currentId = document.querySelector(".playnav-video.selected").id
+                        .replace("playnav-video-", "")
+        // use pchelper for playlists
+        var pchelper_request = [
+            "method=create_new",
+            "video=" + currentId,
+            "playlist_name=" + $(".playlist-name-input").value
+        ].join("&")
+        var r = new XMLHttpRequest();
+        r.open("POST", "/pchelper_playlists")
+        r.send(pchelper_request)
+        r.addEventListener("load", function(e) {
+            updatePlaylists();
+            $(".playlist-create").style.display = "none"
+            $(".playlist-add").style.display = "inline-block"
+            selectedOption = plDropdown.querySelectorAll("option")[0]
+
+            var newId = r.responseText
+            var index = JSON.parse(localStorage.playlistsIndex);
+            index.unshift({"id": newId, "name": $(".playlist-name-input").value})
+            localStorage.playlistsIndex = JSON.stringify(index)
+
+            $("#addToPlaylistResult").style.display = "block"
+            $("#addToPlaylistDiv").style.display = "none"
+        }, false)
+        return;
+    }
+
     var playlistId = Math.floor(Date.now() / 1000)
     localStorage["playlist-" + playlistId] = "[]"
     addPlaylistVideo(playlistId)
@@ -668,5 +772,22 @@ function playnav_sort(sortMode) {
         $(".uploads").className = "uploads hid"
         $(".uploads-filtered").className = "uploads-filtered"
         $(".uploads-filtered").innerHTML = r.responseText
+    }, false)
+}
+
+// playnav more
+function playnav_more(continuation) {
+    var d = document.getElementById("playnav-more-continuation")
+    d.parentNode.removeChild(d)
+
+    $("#playnav-play-loading").style.display = "block"
+    var r = new XMLHttpRequest();
+    r.open("GET", "/channel_sort?rt=" + Date.now())
+    r.setRequestHeader("source", location.pathname)
+    r.setRequestHeader("continuation", continuation)
+    r.send(null)
+    r.addEventListener("load", function(e) {
+        $("#playnav-play-loading").style.display = "none"
+        $(".uploads-filtered").innerHTML += r.responseText
     }, false)
 }

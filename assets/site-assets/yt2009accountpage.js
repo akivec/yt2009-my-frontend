@@ -178,7 +178,8 @@ function pullHomepageSettings() {
 // fill overview data
 var login = "username"
 if(document.cookie
-&& document.cookie.indexOf("login_simulate") !== -1) {
+&& document.cookie.indexOf("login_simulate") !== -1
+&& document.cookie.indexOf("pchelper_user") == -1) {
     login = document.cookie.split("login_simulate")[1].split(":")[0].split(";")[0]
     document.getElementById("overview-username").innerHTML = login
 }
@@ -194,7 +195,10 @@ if(document.cookie
     var f = document.cookie.split("favorites=")[1].split(";")[0]
     favoritesCount += f.split(":").length
 }
-document.getElementById("videos-favd").innerHTML = favoritesCount
+if(!document.cookie
+|| document.cookie.indexOf("pchelper") == -1) {
+    document.getElementById("videos-favd").innerHTML = favoritesCount
+}
 
 // playback settings
 var playbackAnnotationsChanged = false;
@@ -223,7 +227,8 @@ function savePlayback() {
     }, 5000)
 
     var globalFlags = ""
-    if(playbackAnnotationsChanged || playbackCCChanged) {
+    if(playbackAnnotationsChanged || playbackCCChanged
+    || chaptersChanged || autoccChanged) {
         try {
             globalFlags = document.cookie.split("global_flags=")[1].split(";")[0]
         }
@@ -247,7 +252,26 @@ function savePlayback() {
             globalFlags += "always_captions:"
         }
     }
-    if(playbackAnnotationsChanged || playbackCCChanged) {
+    if(chaptersChanged) {
+        var enabled = document.getElementById("playback-chapters-disable").checked
+        if(!enabled && globalFlags.indexOf("disable_chapters") !== -1) {
+            globalFlags = globalFlags.replace("disable_chapters:", "")
+                          .replace("disable_chapters", "")
+        } else if(enabled && globalFlags.indexOf("disable_chapters") == -1) {
+            globalFlags += "disable_chapters:"
+        }
+    }
+    if(autoccChanged) {
+        var enabled = document.getElementById("playback-autocc-disable").checked
+        if(!enabled && globalFlags.indexOf("disable_autocc") !== -1) {
+            globalFlags = globalFlags.replace("disable_autocc:", "")
+                          .replace("disable_autocc", "")
+        } else if(enabled && globalFlags.indexOf("disable_autocc") == -1) {
+            globalFlags += "disable_autocc:"
+        }
+    }
+    if(playbackAnnotationsChanged || playbackCCChanged
+    || chaptersChanged || autoccChanged) {
         var cookie = [
             "global_flags=" + globalFlags + "; ",
             "Path=/; ",
@@ -273,6 +297,12 @@ function pullPlaybackSettings() {
     }
     if(document.cookie.indexOf("always_captions") !== -1) {
         document.getElementById("playback-cc-enable").checked = true;
+    }
+    if(document.cookie.indexOf("disable_chapters") !== -1) {
+        document.getElementById("playback-chapters-disable").checked = true;
+    }
+    if(document.cookie.indexOf("disable_autocc") !== -1) {
+        document.getElementById("playback-autocc-disable").checked = true;
     }
 }
 
@@ -315,4 +345,164 @@ function toggleExpander(context, expanderName) {
     var expanderContent = getElementsByClassName(targetExpander, "page")[0]
     expanderContent.className = expanderContent.className.split("hid").join("")
     getElementsByClassName(targetExpander, "bullet")[0].style.backgroundPosition = "-78px 0px"
+}
+
+function showPictureChangeDialog() {
+    document.getElementById("overlay-cover").className = "cover"
+    document.getElementById("avatar-picker").className = ""
+}
+
+function hidePictureChangeDialog() {
+    document.getElementById("overlay-cover").className = "cover hid"
+    document.getElementById("avatar-picker").className = "hid"
+}
+
+function getPickedStill() {
+    return parseInt(document.getElementById("picked-video-still").value)
+}
+
+function pickVideoStill(stillId, videoId) {
+    var currentStill = getPickedStill()
+    if(currentStill == stillId) {
+        // unpick still if clicked on the same one twice
+        document.getElementById("picked-video-still").value = "0"
+        document.getElementById("video-still-" + stillId).className = ""
+        return;
+    }
+
+    // unpick all stills
+    var stills = getElementsByClassName(document, "video-still-picker")[0]
+                 .getElementsByTagName("a");
+    for(var s in stills) {
+        s = stills[s]
+        if(s.tagName) {
+            s.className = ""
+        }
+    }
+
+    // pick still
+    document.getElementById("video-still-" + stillId).className = "selected"
+    document.getElementById("picked-video-still").value = stillId
+    document.getElementById("picked-video-still-id").value = videoId
+}
+
+// autoshare settings
+
+// make sure pchelper is used
+if(!document.cookie
+|| document.cookie.indexOf("pchelper_user=") == -1) {
+    document.getElementById("pchelper-sharing-notice").className = "bold"
+}
+
+// set radio to enabled if autosharing enabled
+if(document.cookie
+&& document.cookie.indexOf("autoshare_status=sharing-enabled") !== -1) {
+    document.getElementById("sharing-disabled").checked = false;
+    document.getElementById("sharing-enabled").checked = true;
+}
+
+if(document.cookie
+&& document.cookie.indexOf("autoshare_settings=") !== -1) {
+    var settings = document.cookie.split("autoshare_settings=")[1].split(";")[0]
+    settings = settings.split(":")
+    for(var s in settings) {
+        if(settings[s] && document.getElementById(settings[s])
+        && document.getElementById(settings[s]).tagName) {
+            document.getElementById(settings[s]).checked = true;
+        }
+    }
+}
+
+function saveActivity() {
+    var sharingState = (
+        document.getElementById("sharing-enabled").checked
+        ? "sharing-enabled" : "sharing-disabled"
+    )
+    var cookie = [
+        "autoshare_status=" + sharingState + "; ",
+        "Path=/; ",
+        "Expires=Fri, 31 Dec 2066 23:59:59 GMT"
+    ]
+    document.cookie = cookie.join("")
+
+
+    var sharingSettings = []
+    var checks = document.getElementById("autoshare-a")
+                         .getElementsByTagName("input")
+    for(var c in checks) {
+        if(checks[c] && checks[c].tagName && checks[c].checked) {
+            sharingSettings.push(checks[c].id)
+        }
+    }
+    sharingSettings = sharingSettings.join(":")
+    cookie = [
+        "autoshare_settings=" + sharingSettings + "; ",
+        "Path=/; ",
+        "Expires=Fri, 31 Dec 2066 23:59:59 GMT"
+    ]
+    document.cookie = cookie.join("")
+
+    var msg = $(".page-activity-message")
+    msg.style.display = "block"
+    setTimeout(function() {
+        msg.style.display = "none"
+    }, 5000)
+}
+
+// autoshare service(s)
+function confirmDisconnect(service) {
+    var a = confirm("Are you sure you want to disconnect this account?")
+    if(a) {
+        location.href = "/autoshare_disconnect?s=" + service
+    }
+}
+
+function resolveService(name) {
+    var r;
+    if (window.XMLHttpRequest) {
+        r = new XMLHttpRequest()
+    } else {
+        r = new ActiveXObject("Microsoft.XMLHTTP");
+    }
+    r.open("GET", "/autoshare_resolve_user?s=" + name)
+    r.send(null)
+    r.onreadystatechange = function(e) {
+        if((r.readyState && r.readyState == 4)
+        || (this.readyState && this.readyState == 4)
+        || (e.readyState && e.readyState == 4)) {
+            var nameElement = document.getElementById("autoshare-name-" + name)
+            var linkElement = document.getElementById("autoshare-link-" + name)
+            nameElement.innerHTML += " / " + r.responseText;
+            linkElement.innerHTML = "Disconnect accounts"
+            linkElement.href = "javascript:confirmDisconnect('bsky')"
+        }
+    }
+}
+
+var services = ["bsky"]
+for(var s in services) {
+    if(services[s] && document.cookie
+    && document.cookie.indexOf(services[s] + "_uid=") !== -1
+    && document.cookie.indexOf(services[s] + "_eck=") !== -1) {
+        resolveService(services[s])
+    }
+}
+
+// profile setup (wip)
+function saveProfile() {
+    document.getElementById("pchelper-profile-setup-form").submit()
+}
+
+// modern features -- playback setup
+var chaptersChanged = false;
+var autoccChanged = false;
+var alttrackChanged = false;
+function markChaptersChanged() {
+    chaptersChanged = true;
+}
+function markAutoccChanged() {
+    autoccChanged = true;
+}
+function markAlttrack() {
+    alttrackChanged = true;
 }

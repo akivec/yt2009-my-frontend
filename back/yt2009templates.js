@@ -8,7 +8,15 @@ const config = require("./config.json")
 const langs = require("./language_data/language_engine")
 
 module.exports = {
-    "videoComment": function(authorUrl, authorName, commentTime, content, flags, useLanguage, likes, id) {
+    "videoComment": function(
+        authorUrl, authorName, commentTime,
+        content, flags, useLanguage, likes,
+        id, replyData, additionalRenderHeader
+    ) {
+        if(!additionalRenderHeader) {
+            additionalRenderHeader = ""
+        }
+
         if(commentTime.includes("in playlist")) {
             commentTime = commentTime.split("in playlist")[0]
         }
@@ -21,6 +29,7 @@ module.exports = {
             likeColor = "red"
         }
         // check for timestamps/@s in contents
+        content = utils.xss(content)
         content.split(" ").forEach(c => {
             if(c.includes(":")) {
                 let dIndex = c.indexOf(":")
@@ -48,13 +57,27 @@ module.exports = {
             }
         })
         content = content.split("$").join("&#36;")
+        let replyCode = ""
+        let replyHolderCode = ""
+        if(replyData && replyData.length == 2) {
+            let continuation = replyData[0]
+            let count = replyData[1]
+            let replyString = "View " + count + " repl" + (count >= 2 ? "ies" : "y")
+            if(useLanguage && count == 1) {
+                replyString = "lang_watch_replies_single"
+            } else if(useLanguage) {
+                replyString = "lang_watch_replies_plural_prefix" + count + "lang_watch_replies_plural_suffix"
+            }
+            replyCode = `<a href="javascript:void(0)" onclick="loadReplies('${continuation}', this, '${id}');return false;" class="watch-replies-show-link">» ${replyString}</a>`
+            replyHolderCode = `<div id="yt2009-reply-holder-${id}"></div>`
+        }
         let dislikeCode = `onclick="sendCmtRating('${id}', 'dislike');return false;"`
         let likeCode = `onclick="sendCmtRating('${id}', 'like');return false;"`
         return `<div class="watch-comment-entry" ${id ? `id="comment-${id}"` : ""}>
             <div class="watch-comment-head">
                 <div class="watch-comment-info">
                     <a class="watch-comment-auth" href="${authorUrl}" rel="nofollow">${authorName}</a>
-                    <span class="watch-comment-time"> (${commentTime}) </span>
+                    <span class="watch-comment-time"> (${commentTime}) ${utils.xss(additionalRenderHeader)}</span>
                 </div>
                 <div class="watch-comment-voting">
                     <span class="watch-comment-score watch-comment-${likeColor}" data-initial="${likes || 0}">${likePrefix}${likes || 0}</span>
@@ -79,8 +102,8 @@ module.exports = {
                     </div>
                 </div>
                 <div></div>
-            </div>
-        </div>`
+            </div>${replyCode}
+        </div>${replyHolderCode}`
     },
     "relatedVideo": function(id, title, protocol, length, viewCount, creatorUrl, creatorName, flags, playlistId) {
         if(creatorName.startsWith("by ")) {
@@ -190,7 +213,33 @@ module.exports = {
         }
         //"format": "34\/640x360\/9\/0\/115,18\/640x360\/9\/0\/115,5\/320x240\/7\/0\/0,36\/320x240\/99\/0\/0,17\/176x144\/99\/0\/0"
     },
-    "cpsSearchBegin": function(resultCount) {
+    "cpsSearchBegin": function(resultCount, ogUrl) {
+        let nextUrl = `http://${config.ip}:${config.port}${ogUrl}`;
+        let addNext = false;
+        let vidNumber = 20;
+        if(ogUrl.includes("max-results=")
+        && !isNaN(parseInt(
+            ogUrl.split("max-results=")[1].split("&")[0].split("#")[0]
+        ))) {
+            vidNumber = parseInt(
+                ogUrl.split("max-results=")[1].split("&")[0].split("#")[0]
+            )
+        }
+        if(ogUrl.includes("start-index=")) {
+            let index = ogUrl.split("start-index=")[1].split("&")[0].split("#")[0]
+            if(!isNaN(parseInt(index))) {
+                nextUrl = nextUrl.replace(
+                    "start-index=" + index,
+                    "start-index=" + (parseInt(index) + vidNumber)
+                )
+                addNext = true
+            }
+        } else {
+            nextUrl += "&start-index=" + vidNumber
+            addNext = true
+        }
+        nextUrl = nextUrl.split("&").join("&amp;")
+        let next = `\n    <link rel='next' type='application/atom+xml' href='${nextUrl}'/>`
         return `<?xml version='1.0' encoding='UTF-8'?>
 <feed>
     <id>http://gdata.youtube.com/feeds/api/videos</id>
@@ -207,7 +256,7 @@ module.exports = {
     <generator version='2.0' uri='http://gdata.youtube.com/'>YouTube data API</generator>
     <openSearch:totalResults>${resultCount}</openSearch:totalResults>
     <openSearch:startIndex>1</openSearch:startIndex>
-    <openSearch:itemsPerPage>20</openSearch:itemsPerPage>`
+    <openSearch:itemsPerPage>20</openSearch:itemsPerPage>${addNext ? next : ""}`
     },
     "cpsSearchEntry": function(id, title, description, lengthSeconds, authorName) {
         let domainName = config.ip + ":" + config.port
@@ -236,6 +285,9 @@ module.exports = {
 </feed>`,
     "searchVideo": function(id, title, description, authorUrl, authorName, uploadDate, viewCount, time, protocol, browser, flags) {
         let thumbUrl = utils.getThumbUrl(id, flags)
+        title = title.split("$").join("&#36;")
+        description = description.split("$").join("&#36;")
+        authorName = authorName.split("$").join("&#36;")
         return `
         <div class="video-cell" data-id="${id}">
             <div class="video-entry">
@@ -243,7 +295,7 @@ module.exports = {
                     <div class="v120WrapperOuter">
                         <div class="v120WrapperInner">
                             <a id="video-title-results" href="/watch?v=${id}" rel="nofollow">
-                                <img title="${title.split('"').join("&quot;")}" src="${thumbUrl}" class="vimg120">
+                                <img title="${utils.xss(title.split('"').join("&quot;"))}" src="${thumbUrl}" class="vimg120">
                             </a>
                             <div id="quicklist-icon-${id}" class="addtoQL90"><a id="add-to-quicklist-${id}" href="#" ql="${id}" title="lang_add_to_ql"><button class="master-sprite QLIconImg ${browser == "firefox" ? "firefox" : ""} title="" onclick="addToQuicklist('${id}', '${encodeURIComponent(title).split("'").join("\\'")}', '${encodeURIComponent(authorName)}')"></button></a>
                                 <div class="hid quicklist-inlist"><a href="#">lang_ql_added</a></div>
@@ -256,10 +308,10 @@ module.exports = {
                 <div class="video-main-content" id="video-main-content">
                     <div class="video-title video-title-results">
                         <div class="video-short-title">
-                            <a id="video-short-title" href="/watch?v=${id}" title="${title.split('"').join("&quot;")}" rel="nofollow">${title}</a>
+                            <a id="video-short-title" href="/watch?v=${id}" title="${utils.xss(title.split('"').join("&quot;"))}" rel="nofollow">${title}</a>
                         </div>
                         <div class="video-long-title">
-                            <a id="video-long-title" href="/watch?v=${id}" title="${title.split('"').join("&quot;")}" rel="nofollow">${title}</a>
+                            <a id="video-long-title" href="/watch?v=${id}" title="${utils.xss(title.split('"').join("&quot;"))}" rel="nofollow">${title}</a>
                         </div>
                     </div>
     
@@ -269,7 +321,7 @@ module.exports = {
     
                     <div class="result-label">
                         <span class="result-type">Video:</span>
-                        <span class="video-username"><a id="video-from-username" class="hLink" href="${authorUrl}">${authorName}</a></span>
+                        <span class="video-username"><a id="video-from-username" class="hLink" href="${authorUrl}">${utils.xss(authorName)}</a></span>
                     </div>
     
                     <div class="video-facets">
@@ -281,7 +333,7 @@ module.exports = {
     
                         <span id="video-added-time" class="video-date-added">${uploadDate}</span>
                         <span id="video-num-views" class="video-view-count">${viewCount}</span>
-                        <span class="video-username"><a id="video-from-username" class="hLink" href="${authorUrl}">${authorName}</a></span>
+                        <span class="video-username"><a id="video-from-username" class="hLink" href="${authorUrl}">${utils.xss(authorName)}</a></span>
                         <span id="video-average-rating" class="video-rating-grid ">
                             <div>
                                 <button class="master-sprite ratingVS ratingVS-5.0" title="5.0"></button>
@@ -294,6 +346,9 @@ module.exports = {
         </div>`
     },
     "warpVideo": function(id, title, length, creatorName, video_index, description, views, rating, uploaded) {
+        if(typeof(views) == "string") {
+            views = utils.bareCount(views || "1 views")
+        }
         return `
     <video>
         <author>${creatorName}</author>
@@ -302,11 +357,11 @@ module.exports = {
         <length_seconds>${utils.time_to_seconds(length)}</length_seconds>
         <run_time>${length}</run_time>
         <rating_avg>${rating}</rating_avg>
-        <rating_count>${Math.floor(utils.bareCount(views || "1 views") / 150)}</rating_count>
+        <rating_count>${Math.floor(views / 150)}</rating_count>
         <description>${description || "."}</description>
-        <view_count>${utils.bareCount(views || 1)}</view_count>
+        <view_count>${views}</view_count>
         <upload_time>${utils.relativeToAbsoluteApprox(uploaded || "1 day ago")}</upload_time>
-        <comment_count>${Math.floor(utils.bareCount(views || "1 views") / 170)}</comment_count>
+        <comment_count>${Math.floor(views / 170)}</comment_count>
         <tags> </tags>
         <url>http://www.youtube.com/watch?v=${id}</url>
         <thumbnail_url>http://i.ytimg.com/vi/${id}/default.jpg</thumbnail_url>
@@ -435,7 +490,7 @@ module.exports = {
             </div>
         </div>`
     },
-    "videoCommentPost": function(useRelay, relay_url, id, relay_key) {
+    "videoCommentPost": function(id) {
         return `
                         <div id="watch-comment-post">
                             <div class="floatR hid">
@@ -446,8 +501,7 @@ module.exports = {
                         <div>
                             <div style="float:left;width:650px;">
                                 <div id="div_main_comment" style="float:left;" class="">
-                                    <form name="comment_formmain_comment" id="comment_formmain_comment" onsubmit="return false;" method="post" action="${useRelay ? relay_url : ""}/comment_post">
-                                        ${useRelay ? `<input type="hidden" name="relay_key" value="${relay_key}">` : ""}
+                                    <form name="comment_formmain_comment" id="comment_formmain_comment" onsubmit="return false;" method="post" action="/comment_post">
                                         <input type="hidden" name="video_id" value="${id}" id="comment_textarea_video_id">
                                         <input type="hidden" name="form_id" value="comment_formmain_comment">
                                         <input type="hidden" name="reply_parent_id" value="">
@@ -465,7 +519,7 @@ module.exports = {
                         </div>`
     },
     "createFffmpegOgg": function(id) {
-        return `ffmpeg -i ${__dirname}/../assets/${id}.mp4 -b 1500k -ab 128000 -speed 2 ${__dirname}/../assets/${id}.ogg`
+        return `ffmpeg -i "${__dirname}/../assets/${id}.mp4" -b 1500k -ab 128000 -speed 2 "${__dirname}/../assets/${id}.ogg"`
     },
     "morefromEntry": function(name) {
         return `
@@ -519,11 +573,13 @@ module.exports = {
             </div>
         </div>`
     },
-    "flashObject": function(url) {
-        return `<object width="640" height="385" class="fl flash-video" id="watch-player-div"><param name="movie" value="${url}"></param><param name="allowFullScreen" value="true"></param><param name="allowscriptaccess" value="always"></param><embed src="${url}" type="application/x-shockwave-flash" id="movie_player" allowscriptaccess="always" allowfullscreen="true" width="640" height="385" class="fl"></embed></object>`
+    "flashObject": function(url, width, height) {
+        let w = width || 640
+        let h = height || 385 
+        return `<object width="${w}" height="${h}" class="fl flash-video" id="watch-player-div"><param name="movie" value="${url}"></param><param name="allowFullScreen" value="true"></param><param name="allowscriptaccess" value="always"></param><embed src="${url}" type="application/x-shockwave-flash" id="movie_player" allowscriptaccess="always" allowfullscreen="true" width="${w}" height="${h}" class="fl"></embed></object>`
     },
-    "html5Embed": function(id, elementId) {
-        return `<iframe id="${elementId}" allowfullscreen src="/embed/${id}"></iframe>`
+    "html5Embed": function(id, elementId, disableAutoplay) {
+        return `<iframe id="${elementId}" allowfullscreen src="/embed/${id}${disableAutoplay ? "?autoplay=0" : ""}"></iframe>`
     },
     "playlist": function(name, id) {
         return `<div class="subfolder" data-id=${id}" onclick="show_playlist(this)"><a class="name" href="#">${name}</a></div>`
@@ -544,7 +600,11 @@ module.exports = {
             </div>
         </div>`
     },
-    "searchPlaylistEntry": function(id, protocol, videos, name, videoCount, a) {
+    "searchPlaylistEntry": function(id, protocol, videos, name, videoCount, a, flags) {
+        let navUrl = `/playlist?list=${id}`
+        if(id.startsWith("RD") && videos[0] && videos[0].id) {
+            navUrl = `/watch?v=${videos[0].id}&list=${id}`
+        }
         return `
         <div class="playlist-cell" style="width:24.5%">
             <div class="playlist-entry yt-uix-hovercard">
@@ -552,16 +612,16 @@ module.exports = {
                     <div class="vCluster120WideEntry">
                         <div class="vCluster120WrapperOuter playlist-thumbnail">
                             <div class="vCluster120WrapperInner">
-                                <a href="/playlist?list=${id}" rel="nofollow">${videos[0] ? `<img src="${protocol}://i.ytimg.com/vi/${videos[0].id}/hqdefault.jpg" class="vimgCluster120 yt-uix-hovercard-target">` : (a ? `<img src="${a}" class="vimgCluster120 yt-uix-hovercard-target"/>` : "")}</a>
+                                <a href="${navUrl}" rel="nofollow">${videos[0] ? `<img src="${utils.getThumbUrl(videos[0].id, flags)}" class="vimgCluster120 yt-uix-hovercard-target">` : (a ? `<img src="${a}" class="vimgCluster120 yt-uix-hovercard-target"/>` : "")}</a>
                                 ${videos[0] ? `<div class="video-corner-text"><span>${videos[0].length}</span></div>` : ""}
                             </div>
                         </div>
                     </div>
                 </div>
-                <div class="playlist-main-content" id="playlist-main-content-DF3129C5832D6AE7">
+                <div class="playlist-main-content" id="playlist-main-content-${id}">
                     <div class="playlist-title playlist-title-results">
                         <div class="playlist-long-title">
-                            <a href="/playlist?list=${id}" class="yt-uix-hovercard-target" rel="nofollow">${name}</a>
+                            <a href="${navUrl}" class="yt-uix-hovercard-target" rel="nofollow">${name}</a>
                             <span class="playlist-video-count">${videoCount}lang_results_playlist_video_suffix</span>
                         </div>
                     </div>
@@ -592,9 +652,9 @@ module.exports = {
             </div>
                 `
     },
-    "playnavVideo": function(video, video_index, views, upload_date, ratings, protocol) {
+    "playnavVideo": function(video, video_index, views, upload_date, ratings, protocol, live) {
         return `
-        <div class="playnav-item playnav-video ${video_index == 0 ? "selected playnav-item-selected" : ""}" id="playnav-video-${video.id}" onclick="switchVideo(this);return false;">
+        <div class="playnav-item playnav-video ${video_index == 0 ? "selected playnav-item-selected" : ""} ${live ? "playnav-live-video" : ""}" id="playnav-video-${video.id}" onclick="switchVideo(this);return false;">
             <div id="playnav-video-play-${video.id}-selector" class="selector"></div>
             <div class="content">
                 <div class="playnav-video-thumb link-as-border-color">
@@ -603,7 +663,7 @@ module.exports = {
                 </div>
                 <div class="playnav-video-info">
                     <a href="#" class="playnav-item-title ellipsis"><span class="video-title-${video.id}">${video.title}</span></a>
-                    <div class="metadata video-meta-${video.id}">${views} - ${upload_date}</div>
+                    <div class="metadata video-meta-${video.id}">${views}${!live ? " - " : ""}${upload_date}</div>
                     <div class="video-ratings-${video.id} hid">${utils.countBreakup(ratings)}</div>
                 </div>
             </div>
@@ -642,6 +702,21 @@ module.exports = {
                 </a>
             </div>`,
     "playlistScrollboxEnd": `
+        <div class="spacer">&nbsp;</div>
+        <div class="scrollbox-separator">
+            <div class="outer-box-bg-as-border"></div>
+        </div>
+    </div>
+    </div>`,
+    "liveScrollboxHead": `
+    <div class="outer-scrollbox yt2009-scrollbox scrollbox-live hid">
+        <div id="playnav-play-live-items" class="inner-scrollbox">
+            <div class="playnav-live-header">
+                <a style="text-decoration:none" class="title title-text-color">
+                    <span id="playnav-live-title" class="title">lang_playnav_livevids</span>
+                </a>
+            </div>`,
+    "liveScrollboxEnd": `
         <div class="spacer">&nbsp;</div>
         <div class="scrollbox-separator">
             <div class="outer-box-bg-as-border"></div>
@@ -748,57 +823,65 @@ module.exports = {
             </div>`
     },
     "cpbPlaylistsBegin": function(title, id, authorName) {
+        function sd(i) {
+            return i.split("<").join("").split(">").join("").split("&").join("")
+        }
         return `<?xml version='1.0' encoding='UTF-8'?>
-<feed
-    xmlns='http://www.w3.org/2005/Atom'
-    xmlns:app='http://www.w3.org/2007/app'
-    xmlns:media='http://search.yahoo.com/mrss/'
-    xmlns:openSearch='http://a9.com/-/spec/opensearch/1.1/'
-    xmlns:gd='http://schemas.google.com/g/2005'
-    xmlns:yt='http://gdata.youtube.com/schemas/2007' gd:etag='W/&quot;A0EMSX47eCp7ImA9WxJWFkQ.&quot;'>
-    <id>yt2009playlist</id>
+<feed xmlns='http://www.w3.org/2005/Atom' xmlns:app='http://purl.org/atom/app#' xmlns:media='http://search.yahoo.com/mrss/' xmlns:openSearch='http://a9.com/-/spec/opensearchrss/1.0/' xmlns:gd='http://schemas.google.com/g/2005' xmlns:yt='http://gdata.youtube.com/schemas/2007'>
+    <id>http://${config.ip}:${config.port}/feeds/api/playlists/${id}</id>
     <updated>2009-06-22T19:41:28.000Z</updated>
     <category scheme='http://schemas.google.com/g/2005#kind' term='http://gdata.youtube.com/schemas/2007#playlist'/>
-    <title>${title}</title>
-    <subtitle>${title.toLowerCase()}</subtitle>
+    <title type='text'>${sd(title)}</title>
+    <subtitle type='text' />
     <logo>http://www.youtube.com/img/pic_youtubelogo_123x63.gif</logo>
     <link rel='alternate' type='text/html' href='http://www.youtube.com/view_play_list?p=${id}'/>
-    <link rel='http://schemas.google.com/g/2005#feed' type='application/atom+xml' href='http://gdata.youtube.com/feeds/api/playlists/${id}?v=2'/>
-    <link rel='http://schemas.google.com/g/2005#batch' type='application/atom+xml' href='http://gdata.youtube.com/feeds/api/playlists/${id}/batch?v=2'/>
-    <link rel='self' type='application/atom+xml' href='http://gdata.youtube.com/feeds/api/playlists/${id}?start-index=1&amp;max-results=25&amp;v=2'/>
-    <link rel='service' type='application/atomsvc+xml' href='http://gdata.youtube.com/feeds/api/playlists/${id}?alt=atom-service&amp;v=2'/>
+    <link rel='http://schemas.google.com/g/2005#feed' type='application/atom+xml' href='http://${config.ip}:${config.port}/feeds/api/playlists/${id}?r=2'/>
+    <link rel='http://schemas.google.com/g/2005#batch' type='application/atom+xml' href='http://${config.ip}:${config.port}/feeds/api/playlists/${id}/batch'/>
+    <link rel='self' type='application/atom+xml' href='http://${config.ip}:${config.port}/feeds/api/playlists/${id}?r=2'/>
     <author>
-        <name>${authorName}</name>
-        <uri>http://gdata.youtube.com/feeds/api/users/${authorName}</uri>
+        <name>${sd(authorName)}</name>
+        <uri>http://${config.ip}:${config.port}/feeds/api/users/${authorName}</uri>
     </author>
     <generator version='2.0' uri='http://gdata.youtube.com/'>YouTube data API</generator>`
     },
     "cpbPlaylistsCounts": function(results, id, title, description) {
+        function sd(i) {
+            return i.split("<").join("").split(">").join("").split("&").join("")
+        }
         return `
     <openSearch:totalResults>${results}</openSearch:totalResults>
     <openSearch:startIndex>1</openSearch:startIndex>
     <openSearch:itemsPerPage>${results}</openSearch:itemsPerPage>
     <media:group>
         <media:content url='http://www.youtube.com/ep.swf?id=${id}' type='application/x-shockwave-flash' yt:format='5'/>
-        <media:description type='plain'>${description}</media:description>
-        <media:title type='plain'>${title}</media:title>
+        <media:description type='plain'>${sd(description)}</media:description>
+        <media:title type='plain'>${sd(title)}</media:title>
     </media:group>
     <yt:playlistId>${id}</yt:playlistId>`
     },
     "cpbVideo": function(video, index) {
+        let videoUrl = `http://${config.ip}:${config.port}/get_video?video_id=${video.id}/mp4`
+        if(config.trusted_context) {
+            videoUrl += require("./yt2009trustedcontext").urlContext(
+                video.id, "PLAYBACK_STD", false
+            ).split("&").join("&amp;")
+        }
+        function sd(i) {
+            return i.split("<").join("").split(">").join("").split("&").join("")
+        }
         return `
-    <entry gd:etag='W/&quot;DUUMQnYzeCp7ImA9WxFUGU4.&quot;'>
+    <entry>
         <id>${video.id}</id>
         <updated>2010-06-30T22:34:43.880Z</updated>
-        <title>${video.title}</title>
-        <link rel='alternate' type='text/html' href='http://www.youtube.com/watch?v=rInvb982mYU&amp;feature=youtube_gdata'/>
-        <link rel='http://gdata.youtube.com/schemas/2007#video.responses' type='application/atom+xml' href='http://gdata.youtube.com/feeds/api/videos/rInvb982mYU/responses?v=2'/>
-        <link rel='http://gdata.youtube.com/schemas/2007#video.related' type='application/atom+xml' href='http://gdata.youtube.com/feeds/api/videos/rInvb982mYU/related?v=2'/>
-        <link rel='related' type='application/atom+xml' href='http://gdata.youtube.com/feeds/api/videos/rInvb982mYU?v=2'/>
+        <title>${sd(video.title)}</title>
+        <link rel='alternate' type='text/html' href='http://www.youtube.com/watch?v=${video.id}&amp;feature=youtube_gdata'/>
+        <link rel='http://gdata.youtube.com/schemas/2007#video.responses' type='application/atom+xml' href='http://${config.ip}:${config.port}/feeds/api/videos/${video.id}/responses?v=2'/>
+        <link rel='http://gdata.youtube.com/schemas/2007#video.related' type='application/atom+xml' href='http://${config.ip}:${config.port}/feeds/api/videos/${video.id}/related?v=2'/>
+        <link rel='related' type='application/atom+xml' href='http://${config.ip}:${config.port}/feeds/api/videos/${video.id}?v=2'/>
         <link rel='self' type='application/atom+xml' href='http://gdata.youtube.com/feeds/api/playlists/0A7ED544A0D9877D/00A37F607671690E?v=2'/>
         <author>
-            <name>${video.uploaderName}</name>
-            <uri>http://gdata.youtube.com/feeds/api/users/degumusic</uri>
+            <name>${sd(video.uploaderName)}</name>
+            <uri>http://gdata.youtube.com/feeds/api/users/${video.uploaderId}</uri>
         </author>
         <yt:accessControl action='comment' permission='allowed'/>
         <yt:accessControl action='commentVote' permission='allowed'/>
@@ -811,15 +894,15 @@ module.exports = {
             <gd:feedLink href='http://gdata.youtube.com/feeds/api/videos/${video.id}/comments?v=2' countHint='1'/>
         </gd:comments>
         <media:group>
-            <media:content url='http://www.youtube.com/v/${video.id}?f=playlists&amp;app=youtube_gdata' type='application/x-shockwave-flash' medium='video' isDefault='true' expression='full' duration='583' yt:format='5'/>
-            <media:credit role='uploader' scheme='urn:youtube' yt:type='partner'>sltrib</media:credit>
-            <media:description type='plain'>${video.description}</media:description>
-            <media:keywords>salt, lake, tribune, utah, tourist, business</media:keywords>
-            <media:player url='http://www.youtube.com/watch?v=rInvb982mYU&amp;feature=youtube_gdata'/>
-            <media:thumbnail url='http://i.ytimg.com/vi/${video.id}/default.jpg' height='90' width='120' time='00:00:00.500'/>
-            <media:thumbnail url='http://i.ytimg.com/vi/rInvb982mYU/hqdefault.jpg' height='360' width='480'/>
-            <media:title type='plain'>${video.title}</media:title>
-            <yt:aspectRatio>widescreen</yt:aspectRatio>
+            <media:content url='${videoUrl}' type='video/3gpp' medium='video' expression='full' duration='999' yt:format='3'/>
+            <media:credit role='uploader' scheme='urn:youtube' yt:type='partner'>${video.uploaderName}</media:credit>
+            <media:description type='plain'>${sd(video.description || "")}</media:description>
+            <media:keywords>-</media:keywords>
+            <media:player url='http://www.youtube.com/watch?v=${video.id}&amp;feature=youtube_gdata'/>
+            <media:thumbnail yt:name='hqdefault' url='http://i.ytimg.com/vi/${video.id}/hqdefault.jpg' height='240' width='320' time='00:00:00'/>
+            <media:thumbnail yt:name='poster' url='http://i.ytimg.com/vi/${video.id}/0.jpg' height='240' width='320' time='00:00:00'/>
+            <media:thumbnail yt:name='default' url='http://i.ytimg.com/vi/${video.id}/0.jpg' height='240' width='320' time='00:00:00'/>
+            <media:title type='plain'>${sd(video.title)}</media:title>
             <yt:duration seconds='${video.time ? utils.time_to_seconds(video.time) : "1"}'/>
             <yt:uploaded>2009-03-02T21:47:27.000Z</yt:uploaded>
             <yt:videoid>${video.id}</yt:videoid>
@@ -833,6 +916,10 @@ module.exports = {
         let uploadDate = flags.includes("fake_dates")
                         ? utils.genFakeDate(videoIndex) : video.upload
         let viewCount = video.views;
+        if(video.views == "EMPTY_ALLOWED") {
+            video.views = ""
+            viewCount = ""
+        }
         if(flags.includes("realistic_view_count")
         && parseInt(video.views.replace(/[^0-9]/g, "")) >= 100000) {
             viewCount = utils.countBreakup(
@@ -843,15 +930,15 @@ module.exports = {
         <div class="video" style="float: left; margin: 15px 0 0 0; padding: 10px 0 10px 10px; width: 150px;">
             <div style="float: left;">
                 <div style="float: left;">
-                    <input type="checkbox" class="checkbox" value="${video.id}" />
+                    <input type="checkbox" class="checkbox" value="${video.id}" data-videoid="${video.id}" />
                 </div>
             </div>
             <div style="float: left; width: 120px;">
                 <a href="/watch?v=${video.id}" class="video-thumb"><img src="${video.thumbnail}"/></a>
-                <a href="/watch?v=${video.id}" class="title" style="display: block; color: #03c;">${video.title}</a>
+                <a href="/watch?v=${video.id}" class="title" style="display: block; color: #03c; word-break: break-word;">${video.title}</a>
                 <div class="video-stats">
                     <div class="video-stat"><span class="stat-upload">${video.upload ? `Added: ${uploadDate}` : ""}</span></div>
-                    <div class="video-stat"><span class="stat-views">Views: ${viewCount}</span></div>
+                    ${viewCount ? `<div class="video-stat"><span class="stat-views">Views: ${viewCount}</span></div>` : ""}
                     <div class="video-stat"><span class="stat-rating"><img class="yt-rating-5.0" src="/assets/site-assets/pixel-vfl73.gif" alt="5.0" /></span></div>
                 </div>
             </div>
@@ -874,16 +961,22 @@ module.exports = {
     "embedNoControlsFadeCode": `
     fadeControlsEnable = false;
     var s = document.createElement("style")
-    s.innerHTML = "video:not(.showing-endscreen) {height: calc(100% - 25px) !important;}#watch-player-div {background: black !important;}"
+    s.innerHTML = "video {height: calc(100% - 25px) !important;}#watch-player-div {background: black !important;}"
     document.body.appendChild(s)`,
     "embedVideoSources": function(id) {
-        //let mp4Path = `/assets/${id}.mp4`
         let mp4Path = `/get_video?video_id=${id}/mp4`
         let ogvPath = `/assets/${id}.ogg`
         if(id.includes("googlevideo")) {
             mp4Path = id;
             ogvPath = id;
         }
+
+        if(config.trusted_context) {
+            mp4Path += "&" + require("./yt2009trustedcontext").generateContext(
+                id, "PLAYBACK_STD", false
+            )
+        }
+
         return `<source src="${mp4Path}" type="video/mp4"></source>
         <source src="${ogvPath}" type="video/ogg"></source>`
     },
@@ -907,10 +1000,22 @@ module.exports = {
     }
     </style>
     `,
-    "playerHDBtnJS": function(id, use720p, autoHQ) {
+    "playerHDBtnJS": function(id, use720p, autoHQ, trustedContextData, videoLengthMinutes) {
+        let stdUrl = `/get_video?video_id=${id}/mp4`
+        let hqUrl = `/${use720p ? "exp_hd" : "get_480"}?video_id=${id}`
+        if(trustedContextData) {
+            stdUrl += "&" + trustedContextData.sd;
+            hqUrl += "&" + trustedContextData.hq;
+        }
+        let seekbarRemoveWidth = 245
+        if(videoLengthMinutes && videoLengthMinutes >= 100) {
+            seekbarRemoveWidth = 265
+        } else if(videoLengthMinutes && videoLengthMinutes >= 10) {
+            seekbarRemoveWidth = 255
+        }
         return `
         //exp_hq
-        seekbarRemoveWidth = 245;
+        seekbarRemoveWidth = ${seekbarRemoveWidth};
         adjustSeekbarWidth();
         var hqPlaying = false;
 
@@ -922,7 +1027,7 @@ module.exports = {
                 hqPlaying = true;
                 $("video").innerHTML = "";
                 var length = seconds_to_time(Math.floor(video.duration || 0))
-                $("video").src = "/${use720p ? "exp_hd" : "get_480"}?video_id=${id}"
+                $("video").src = "${hqUrl}"
                 setTimeout(function() {
                     $(".video_controls .timer").innerHTML = "0:00 / " + length;
                     showLoadingSprite();
@@ -930,7 +1035,7 @@ module.exports = {
                 $(".video_controls .hq").className = "hq ${use720p ? "hd" : ""} enabled"
                 video_play()
             } else {
-                $("video").src = "/get_video?video_id=${id}/mp4";
+                $("video").src = "${stdUrl}";
                 hqPlaying = false;
                 $(".video_controls .hq").className = "hq ${use720p ? "hd" : ""}"
             }
@@ -939,7 +1044,7 @@ module.exports = {
         // fallback do 360p
         $("video").addEventListener("error", function() {
             if(hqPlaying) {
-                $("video").src = "/get_video?video_id=${id}/mp4";
+                $("video").src = "${stdUrl}";
                 hqPlaying = false;
                 $(".video_controls .hq").className = "hq ${use720p ? "hd" : ""}"
             }
@@ -1006,11 +1111,7 @@ module.exports = {
         <openSearch:itemsPerPage>25</openSearch:itemsPerPage>
     </feed>`,
     "gdata_feedStart": `<?xml version='1.0' encoding='UTF-8'?>
-<feed xmlns='http://www.w3.org/2005/Atom'
-xmlns:media='http://search.yahoo.com/mrss/'
-xmlns:openSearch='http://a9.com/-/spec/opensearchrss/1.0/'
-xmlns:gd='http://schemas.google.com/g/2005'
-xmlns:yt='http://gdata.youtube.com/schemas/2007'>
+<feed xmlns='http://www.w3.org/2005/Atom' xmlns:media='http://search.yahoo.com/mrss/' xmlns:openSearch='http://a9.com/-/spec/opensearchrss/1.0/' xmlns:gd='http://schemas.google.com/g/2005' xmlns:yt='http://gdata.youtube.com/schemas/2007'>
     <id>http://gdata.youtube.com/feeds/api/standardfeeds/us/recently_featured</id>
     <updated>2010-12-21T18:59:58.000-08:00</updated>
     <category scheme='http://schemas.google.com/g/2005#kind' term='http://gdata.youtube.com/schemas/2007#video'/>
@@ -1025,11 +1126,27 @@ xmlns:yt='http://gdata.youtube.com/schemas/2007'>
     <openSearch:startIndex>1</openSearch:startIndex>
     <openSearch:itemsPerPage>25</openSearch:itemsPerPage>`,
     "gdata_feedEnd": "\n</feed>",
-    "gdata_feedVideo": function(id, title, author, views, length, description, uploadDate, keywords, category, flags, qualities) {
+    "gdata_feedVideo": function(id, title, author, views, length, description, uploadDate, keywords, category, flags, qualities, additional) {
+        if(!id) return ""
+        
         // flag handling
-        if((flags || []).includes("realistic-view-count")
+        if(typeof(flags) == "object") {
+            try {
+                flags = flags.join(",")
+            }
+            catch(error){}
+        }
+        if(flags && flags.includes("realistic-view-count")
         && views >= 100000) {
             views = Math.floor(views / 90)
+        }
+
+        // is a video from favorites
+        let isFav = id.includes("/fav")
+        id = id.replace("/fav", "")
+        let favCode = ""
+        if(isFav) {
+            favCode = `<link rel="edit" href="http://${config.ip}:${config.port}/feeds/api/videos/${id}/edit"/>`
         }
 
         // rating
@@ -1064,18 +1181,64 @@ xmlns:yt='http://gdata.youtube.com/schemas/2007'>
         }
 
         // qualities
+        let trustedContexts = false;
+        const yt2009trusted = require("./yt2009trustedcontext")
+        let long = length >= (60 * 30)
+        let streamHQ = `http://${config.ip}:${config.port}/get_480?video_id=${id}`
+        let streamHD = `http://${config.ip}:${config.port}/exp_hd?video_id=${id}`
+        let streamStd = `http://${config.ip}:${config.port}/channel_fh264_getvideo?v=${id}`
+        if(config.trusted_context) {
+            trustedContexts = {
+                "sd": yt2009trusted.generateContext(id, "PLAYBACK_STD", long)
+            }
+            if(!qualities) {qualities = []}
+            if(qualities.includes("480p")) {
+                trustedContexts.hq = yt2009trusted.generateContext(
+                    id, "PLAYBACK_HQ", long
+                ).split("&").join("&amp;")
+            }
+            if(qualities.includes("720p")) {
+                trustedContexts.hd = yt2009trusted.generateContext(
+                    id, "PLAYBACK_HD", long
+                ).split("&").join("&amp;")
+            }
+
+            streamStd += "&amp;" + trustedContexts.sd.split("&").join("&amp;")
+            streamHQ += "&amp;" + trustedContexts.hq
+            streamHD += "&amp;" + trustedContexts.hd
+        }
+
         let qualityCode = ""
         if(qualities) {
             if(qualities.includes("480p")) {
-                qualityCode += `<media:content url='http://${config.ip}:${config.port}/get_480?video_id=${id}' type='video/3gpp' medium='video' expression='full' duration='999' yt:format='14'/>`
+                qualityCode += `<media:content url='${streamHQ}' type='video/3gpp' medium='video' expression='full' duration='999' yt:format='14'/>`
             }
             if(qualities.includes("720p")) {
-                qualityCode += `<media:content url='http://${config.ip}:${config.port}/exp_hd?video_id=${id}' type='video/3gpp' medium='video' expression='full' duration='999' yt:format='8'/>`
+                qualityCode += `<media:content url='${streamHD}' type='video/3gpp' medium='video' expression='full' duration='999' yt:format='8'/>`
             }
+        }
+
+        // auto-try hd
+        let videoUrl = streamStd
+        if(flags && flags.includes("better-hd")) {
+            videoUrl = `http://${config.ip}:${config.port}/exp_hd?video_id=${id}/lower`
+            videoUrl += "&amp;" + yt2009trusted.generateContext(id, "UNIV", long)
+                        .split("&").join("&amp;")
+            qualityCode = ""
         }
 
         // category names
         category = (category || "-").split("&").join("&amp;")
+
+        // additional data
+        let add = ""
+        if(additional && additional.authorFull && !additional.omitY9) {
+            add += "\n          <yt9full>" + utils.xss(additional.authorFull).split("&").join("&amp;") + "</yt9full>"
+        }
+        if(additional && additional.authorId && !additional.omitY9) {
+            add += "\n          <yt9aid>" + additional.authorId + "</yt9aid>"
+        }
+
         return `
         <entry>
             <id>http://${config.ip}:${config.port}/feeds/api/videos/${id}</id>
@@ -1083,33 +1246,37 @@ xmlns:yt='http://gdata.youtube.com/schemas/2007'>
             <published>${uploadDate ? new Date(uploadDate).toISOString() : ""}</published>
             <updated>${uploadDate ? new Date(uploadDate).toISOString() : ""}</updated>
             <category scheme="http://gdata.youtube.com/schemas/2007/categories.cat" label="${category}" term="${category}">${category}</category>
-            <title type='text'>${title.split("<").join("").split(">").join("").split("&").join("")}</title>
-            <content type='text'>${description.split("<").join("").split(">").join("").split("&").join("")}</content>
-            <link rel="http://gdata.youtube.com/schemas/2007#video.related" href="http://${config.ip}:${config.port}/feeds/api/videos/${id}/related"/>
+            <title type='text'>${title.split("<").join("").split(">").join("").split("&").join("&amp;")}</title>
+            <content type='text'>${(description||"").split("<").join("").split(">").join("").split("&").join("&amp;")}</content>
+            <link rel="http://gdata.youtube.com/schemas/2007#video.related" href="http://${config.ip}:${config.port}/feeds/api/videos/${id}/related"/>${favCode}
             <author>
                 <name>${author}</name>
-                <uri>http://gdata.youtube.com/feeds/api/users/${author}</uri>
+                <uri>http://${config.ip}:${config.port}/feeds/api/users/${author}</uri>
+                <yt:userId>${((additional&&additional.authorId)||"")}</yt:userId>
             </author>
             <gd:comments>
                 <gd:feedLink href='http://${config.ip}:${config.port}/feeds/api/videos/${id}/comments' countHint='530'/>
             </gd:comments>
             <media:group>
+                <media:title>${title.split("<").join("").split(">").join("").split("&").join("&amp;")}</media:title>
                 <media:category label='${category}' scheme='http://gdata.youtube.com/schemas/2007/categories.cat'>${category}</media:category>
-                <media:content url='http://${config.ip}:${config.port}/channel_fh264_getvideo?v=${id}' type='video/3gpp' medium='video' expression='full' duration='999' yt:format='3'/>${qualityCode}
-                <media:description type='plain'>${description.split("<").join("").split(">").join("").split("&").join("")}</media:description>
+                <media:content url='${videoUrl}' type='video/3gpp' medium='video' expression='full' duration='999' yt:format='3'/>${qualityCode}
+                <media:description type='plain'>${(description||"").split("<").join("").split(">").join("").split("&").join("&amp;")}</media:description>
                 <media:keywords>${unduplicateKeywordList.join(", ")}</media:keywords>
                 <media:player url='http://www.youtube.com/watch?v=${id}'/>
                 <media:thumbnail yt:name='hqdefault' url='http://i.ytimg.com/vi/${id}/hqdefault.jpg' height='240' width='320' time='00:00:00'/>
                 <media:thumbnail yt:name='poster' url='http://i.ytimg.com/vi/${id}/0.jpg' height='240' width='320' time='00:00:00'/>
                 <media:thumbnail yt:name='default' url='http://i.ytimg.com/vi/${id}/0.jpg' height='240' width='320' time='00:00:00'/>
                 <yt:duration seconds='${length}'/>
+                <yt:uploaded>${uploadDate ? new Date(uploadDate).toISOString() : ""}</yt:uploaded>
+                <yt:uploaderId>${(additional&&additional.authorId)||""}</yt:uploaderId>
                 <yt:videoid id='${id}'>${id}</yt:videoid>
                 <youTubeId id='${id}'>${id}</youTubeId>
-                <media:credit role='uploader' name='${author}'>${author}</media:credit>
+                <media:credit role='uploader' yt:display='${author}' name='${author}'>${author}</media:credit>
             </media:group>
             <gd:rating average='5' max='5' min='1' numRaters='${Math.floor(views / 600)}' rel='http://schemas.google.com/g/2005#overall'/>
             <yt:statistics favoriteCount="${Math.floor(views / 150)}" viewCount="${views}"/>
-            <yt:rating numLikes="${Math.floor(likeCount)}" numDislikes="${Math.floor(dislikeCount)}"/>
+            <yt:rating numLikes="${Math.floor(likeCount)}" numDislikes="${Math.floor(dislikeCount)}"/>${add}
         </entry>`
     },
     "gdata_feedComment": function(id, authorName, comment, time) {
@@ -1134,6 +1301,10 @@ xmlns:yt='http://gdata.youtube.com/schemas/2007'>
 	</entry>`
     },
     "gdata_user": function(id, name, avatar, subs, videoCount, channelViews, uploadViews, flags) {
+        if(flags.includes("uncrop-avatar")
+        && avatar.includes("/assets/")) {
+            avatar = `http://${config.ip}:${config.port}/mobile/avatar_process?avatar=/assets/${avatar.split("assets/")[1]}`
+        }
         if(flags.includes("default-avatar-adapt")) {
             let avatarUrl = avatar.replace(
                 `http://${config.ip}:${config.port}`,
@@ -1176,6 +1347,7 @@ xmlns:yt='http://gdata.youtube.com/schemas/2007'>
     <yt:statistics lastWebAccess='2011-02-01T12:45:18.000-08:00' subscriberCount='${subs}' videoWatchCount='1' viewCount='${channelViews}' totalUploadViews='${uploadViews}'/>
     <media:thumbnail url='${avatar}'/>
     <yt:username>${name}</yt:username>
+    <yt:channelId>${id}</yt:channelId>
 </entry>` 
     },
     "gdata_playlistEntry": function(author, playlistId, playlistName, vidCount, summary) {
@@ -1197,7 +1369,8 @@ xmlns:yt='http://gdata.youtube.com/schemas/2007'>
 			<uri>http://${config.ip}:${config.port}/feeds/api/users/${author}</uri>
 		</author>
 		<gd:feedLink rel='http://gdata.youtube.com/schemas/2007#playlist' href='http://${config.ip}:${config.port}/feeds/api/playlists/${playlistId}' countHint='${vidCount}'/>
-		<yt:description>None</yt:description> 
+		<yt:description>None</yt:description>
+        <yt:countHint>${vidCount}</yt:countHint>
 		<summary>${summary}</summary>
 	</entry>`
     },
@@ -1259,7 +1432,7 @@ xmlns:yt='http://gdata.youtube.com/schemas/2007'>
                                     <a href="#">lang_hp_learnmore</a>
                                 </div>
                                 <div class="feedmodule-updown">
-                                    <span id="medit-REC" class="iyt-edit-link iyt-edit-link-gray">lang_hp_edit</span>
+                                    <span id="medit-REC" class="iyt-edit-link iyt-edit-link-gray" onclick="recommended_edit_show();">lang_hp_edit</span>
                                     <span id="mup-REC" class="up-button" onclick="moveUp('rec')">
                                         <img class="master-sprite img-php-up-arrow" src="/assets/site-assets/pixel-vfl73.gif">
                                     </span>
@@ -1275,6 +1448,51 @@ xmlns:yt='http://gdata.youtube.com/schemas/2007'>
                     </div>
                     <div class="clear feedmodule-border-gray yt-rounded" id="feed_recommended-content">
                         <div id="REC-data" class="feedmodule-data">
+                            <div id="REC-options" class="opt-pane hid">
+                                <div class="opt-box-top">
+                                    <img class="homepage-ajax-sprite img-php-opt-box-caret" src="/assets/site-assets/pixel-vfl73.gif">
+                                </div>
+                                <div class="opt-banner">
+                                    <div class="opt-links">
+                                        <div class="opt-edit grayText">Editing: Recommended for You</div>
+                                        <div class="opt-close opt-close-text iyt-edit-link" onclick="recommended_edit_hide();">close</div>
+                                        <div id="REC-loading-msg" class="opt-loading-msg" style="display: none;">
+                                            Saving...
+                                        </div>
+                                        <div class="clear"></div>
+                                    </div>
+                                </div>
+                                <div class="opt-main">
+                                    <div class="opt-divider">
+                                        <table class="opt-tbl">
+                                            <tbody>
+                                                <tr>
+                                                    <td class="opt-name">
+                                                        Display as:
+                                                    </td>
+                                                    <td class="opt-val opt-sel">
+                                                        <div id="REC-options-SIN" class="opt-form-type-btns">
+                                                            <img src="/assets/site-assets/pixel-vfl73.gif" class="homepage-ajax-sprite btn-listview-off" title="List View" alt="List View" id="rec-style-list" onclick="homepageRecSet('list')"><img src="/assets/site-assets/pixel-vfl73.gif" id="rec-style-grid" class="homepage-ajax-sprite btn-gridview-on" title="Grid View" alt="Grid View" onclick="homepageRecSet('grid')">
+                                                        </div>
+                                                    </td>
+                                                    <td class="opt-name" id="reco-opt-num-picker">
+                                                        Number of rows to display:
+                                                    </td>
+                                                    <td class="opt-val">
+                                                        <select id="REC-options-num" name="REC-options-num" onchange="homepageRecSet('rows')">
+                                                            <option value="1">1</option>
+                                                            <option value="2" selected>2</option>
+                                                            <option value="3">3</option>
+                                                            <option value="4">4</option>
+                                                            <option value="5">5</option>
+                                                        </select>
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
                             <div id="logged_out_rec_learn_more_box" class="yt-rounded side-announcement-box" style="margin: 5px 10px 5px 5px; padding: 5px; display: none;">
                                 <div style="cursor: pointer; display:inline; float: right;" id="yt2009-rec-more-close"><img class="img-php-close-button master-sprite" style="background-position: -57px -712px;" src="/assets/site-assets/pixel-vfl73.gif"></div>
                                 <div style="color: black; padding-left: 5px;">
@@ -1284,7 +1502,7 @@ xmlns:yt='http://gdata.youtube.com/schemas/2007'>
                                     lang_hp_rec_desc_p3
                                 </div>
                             </div>
-                            <div class="feedmodule-body grid-view">
+                            <div class="feedmodule-body grid-view" id="REC-feedmodule-body">
                                 <div id="recommended-loading-sprite"><img src="/assets/site-assets/icn_loading_animated-vfl24663.gif" style="margin-left: 310px;margin-top: 30px;margin-bottom: 30px;"></div>
                                 <div class="clearL yt2009-cells-container" id="yt2009-recommended-cells-container">
                                     
@@ -1295,14 +1513,18 @@ xmlns:yt='http://gdata.youtube.com/schemas/2007'>
                     <div class="clear"></div>
                 </div>
                 <script src="/assets/site-assets/homepage-recommended.js"></script>`,
-    "recommended_videoCell": function(video, req) {
+    "recommended_videoCell": function(video, req, flags) {
         let thumbUrl = utils.getThumbUrl(video.id, req)
+        let creatorName = video.author_name || video.creatorName;
+        if(flags && flags.includes("username_asciify")) {
+            creatorName = utils.asciify(creatorName)
+        }
         return `<div class="video-cell" style="width:24.5%" data-id="${video.id}">
         <div class="video-entry yt-uix-hovercard">
             <div class="v120WideEntry">
                 <div class="v120WrapperOuter">
                     <div class="v120WrapperInner"><a id="video-url-${video.id}" class="video-thumb-link" href="/watch?v=${video.id}" rel="nofollow"><img title="${video.title.split(`"`).join(`&quot;`)}" src="${thumbUrl}" class="vimg120 yt-uix-hovercard-target"></a>
-                        <div id="quicklist-icon-${video.id}" class="addtoQL90"><a id="add-to-quicklist-${video.id}" href="#" ql="${video.id}" title="lang_add_to_ql" onclick="addToQuicklist('${video.id}', '${video.title.split(`'`).join("&quot;").split(`"`).join("&quot;")}', '${utils.asciify(video.creatorName)}')"><button class="master-sprite QLIconImg" title=""></button></a>
+                        <div id="quicklist-icon-${video.id}" class="addtoQL90"><a id="add-to-quicklist-${video.id}" href="#" ql="${video.id}" title="lang_add_to_ql" onclick="addToQuicklist('${video.id}', '${video.title.split(`'`).join("&quot;").split(`"`).join("&quot;")}', '${creatorName.split(`'`).join("&quot;").split(`"`).join("&quot;")}')"><button class="master-sprite QLIconImg" title=""></button></a>
                             <div class="hid quicklist-inlist"><a href="/my_quicklist">lang_ql_added_homepage</a></div>
                         </div>
                         <div class="video-time"><a id="video-run-time-${video.id}" href="/watch?v=${video.id}" rel="nofollow">${video.length}</a></div>
@@ -1332,7 +1554,7 @@ xmlns:yt='http://gdata.youtube.com/schemas/2007'>
                             <button class="master-sprite ratingVS ratingVS-4.5" title="4.5"></button>
                         </div>
                     </span>
-                    <span class="video-username"><a id="video-from-username-${video.id}" class="hLink" href="${video.creatorUrl}">${utils.asciify(video.creatorName)}</a></span>
+                    <span class="video-username"><a id="video-from-username-${video.id}" class="hLink" href="${video.author_url || video.creatorUrl}">${creatorName}</a></span>
                 </div>
             </div>
             <div class="video-clear-list-left"></div>
@@ -1404,7 +1626,7 @@ xmlns:yt='http://gdata.youtube.com/schemas/2007'>
                 <td colspan="2">
         `
     }, `</td></tr></tbody>`],
-    "listview_video": function(v, index, flags) {
+    "expandview_video": function(v, index, flags) {
         let thumbUrl = utils.getThumbUrl(v.id, flags)
         return `
     <tr id="video-${v.id}" class="video ${index % 2 == 0 ? "even" : "odd"}">
@@ -1421,19 +1643,19 @@ xmlns:yt='http://gdata.youtube.com/schemas/2007'>
                         </div>
                     </div>
                     <p id="video-description-${v.id}" class="video-description-expanded"><span>${
-                        v.description.length > 140
+                        (v.description && v.description.length > 140)
                         ? v.description.split("\n")[0].substring(0, 140) + "..."
-                        : v.description
+                        : (v.description || "")
                     }</span></p>
                     <div class="video-stats">
                         <div class="video-stat">
-                            Added: <span class="stat-date-added">${utils.dateFormat(v.upload)}</span>
+                            Added: <span class="stat-date-added">${utils.dateFormat(v.upload || v.publishedAt)}</span>
                         </div>
                         <div class="video-stat">
-                            Time: <span class="stat-duration">${utils.seconds_to_time(v.length)}</span>
+                            Time: <span class="stat-duration">${utils.seconds_to_time(v.length || utils.dataApiDurationSeconds(v.duration))}</span>
                         </div>
                         <div class="video-stat">
-                            Owner: <a href="${v.author_url}" class="stat-username">${utils.asciify(v.author_name)}</a>
+                            Owner: <a href="${v.author_url || `/channel/${v.channelId}`}" class="stat-username">${utils.asciify(v.author_name || v.channelTitle)}</a>
                         </div>
                     </div>
                     <div class="video-stats">
@@ -1455,7 +1677,99 @@ xmlns:yt='http://gdata.youtube.com/schemas/2007'>
         </td>
     </tr>`
     },
+    "creator_listview_video": function(v, index, flags) {
+        let thumbUrl = utils.getThumbUrl(v.id, flags)
+
+        if(v.thumbnail) {
+            // override thumbnail - if defined, then needed
+            thumbUrl = v.thumbnail
+        }
+        let privacy = "Public"
+        switch(v.privacy) {
+            case "VIDEO_PRIVACY_PUBLIC": {
+                privacy = "Public"
+                break;
+            }
+            case "VIDEO_PRIVACY_UNLISTED": {
+                privacy = "Unlisted"
+                break;
+            }
+            case "VIDEO_PRIVACY_PRIVATE": {
+                privacy = "Private"
+                break;
+            }
+        }
+        let rating;
+        if(v.likes == 0 && v.dislikes == 0) {
+            rating = 0
+        } else if(v.likes == 0 && v.dislikes >= 1) {
+            rating = 1
+        } else {
+            rating = 5 * (v.likes / (v.likes + v.dislikes))
+            rating = utils.custom_rating_round(rating)
+        }
+        rating = rating.toFixed(1)
+        return `
+    <tr id="video-${v.id}" class="video ${index % 2 == 0 ? "even" : "odd"}">
+        <td class="column-check first"><input type="checkbox" value="${v.id}"></td>
+        <td class="column-details">
+            <div class="video-panel">
+                <div class="video-details" style="margin: 0 0 10px 130px;">
+                    <div class="video-image" style="position: absolute; margin-left: -130px;overflow: hidden;height: 78px;">
+                        <a class="video-thumb-120 no-quicklist" href="/watch?v=${v.id}"><img title="${v.title.split("\"").join("&quot;")}" src="${thumbUrl}" class="vimg120 yt-uix-hovercard-target" style="margin-top: -6px" alt="${v.title.split("\"").join("&quot;")}"></a>
+                    </div>
+                    <div class="video-title">
+                        <div class="clipper">
+                            <a href="/watch?v=${v.id}">${v.title}</a>
+                        </div>
+                    </div>
+                    <p id="video-description-${v.id}" class="video-description-expanded"><span>  </span></p>
+                    <div class="video-stats">
+                        <div class="video-stat">
+                            Added: <span class="stat-date-added">${utils.dateFormat(v.added)}</span>
+                        </div>
+                        <div class="video-stat">
+                            Time: <span class="stat-duration">${v.time}</span>
+                        </div>
+                        <div class="video-stat">
+                            Broadcast: <span class="stat-privacy">${privacy}</span></a>
+                        </div>
+                    </div>
+                    <div class="video-stats">
+                        <div class="video-stat">
+                            Views: <span class="stat-views">${utils.countBreakup(v.views)}</span>
+                        </div>
+                        <div class="video-stat">
+                            Comments: <span class="stat-comments">${utils.countBreakup(v.comments)}</span>
+                        </div>
+                        <div class="video-stat">
+                            Rating: <span class="stat-rating"><img class="yt-rating-${rating}" src="/assets/site-assets/pixel-vfl73.gif" alt="${rating}"></span>
+                        </div>
+                    </div>
+                    <div style="clear: both;"></div>
+                    <div class="video-buttons">
+                        <a class="yt-button" id="" href="/watch?v=${v.id}"><span>Play</span></a>
+                        <a class="yt-button" id="" href="/my_videos_edit?video_id=${v.id}"><span>Edit</span></a>
+                        ${v.downloadUrl ? `<a class="yt-button" target="_blank" id="" href="https://www.youtube.com${v.downloadUrl}"><span>Download MP4</span></a>` : ""}
+                        <a class="yt-button" id="delete-video-button" href="javascript:void(0)" onclick="deletePrompt('${v.id}')"><span>Delete</span></a>
+                        <form action="/my_videos_delete" method="POST" class="hid" id="video-delete-${v.id}">
+                        <input type="hidden" name="video_ids" value="${v.id}">
+                        </form>
+                    </div>
+                </div>
+                <div class="video-buttons-ext">
+                </div>
+            </div>
+        </td>
+    </tr>`
+    },
     "blazer_bareVideo": function(id, title, length, views, author, tags) {
+        let stream_url = "/get_video?video_id=" + id + "/mp4";
+        if(config.trusted_context) {
+            stream_url += "&" + require("./yt2009trustedcontext").generateContext(
+                id, "PLAYBACK_STD", false
+            )
+        }
         return {
             "id": id,
             "video_id": id,
@@ -1466,8 +1780,7 @@ xmlns:yt='http://gdata.youtube.com/schemas/2007'>
             "username": author,
             "watch_link": "/watch?v=" + id,
             "thumbnail_for_list": "<img src=\"http://i.ytimg.com/vi/" + id + "/default.jpg\"/>",
-            "stream_url": "/get_video?video_id=" + id + "/mp4",
-            "u_hq_stream_url": "/get_480?video_id=" + id + "/mp4",
+            "stream_url": stream_url,
             "landscape": true,
             "stitched_thumbnail_large": {
                 "url": "http://i.ytimg.com/vi/" + id + "/hqdefault.jpg",
@@ -1482,10 +1795,10 @@ xmlns:yt='http://gdata.youtube.com/schemas/2007'>
             "time_created_text": ""
         }
     },
-    "banner": function(url) {return `<div id="user_banner" class="profile-banner-box"><img src="${url}" class="" width="960" height="150"></div>`},
+    "banner": function(url) {return `<div id="user_banner" class="profile-banner-box"><img src="${url}" onerror="document.getElementById('user_banner').style.display = 'none'" class="" width="960" height="150"></div>`},
     "watchBanner": function(link, img) {
     return `<div id="watch-channel-brand-cap">
-        <a href="${link}"><img src="${img}" width="300" height="50" border="0"></a>
+        <a href="${link}"><img src="${img}" onerror="document.getElementById('watch-channel-brand-cap').style.display = 'none';" width="300" height="50" border="0"></a>
     </div>`},
     "sidebarSub": function(sub) {return `<div class="subfolder channel-subfolder" onclick="switchChannel(this)" data-url="${sub.url}"><a class="name" href="#">${sub.name.trim()}</a></div>`},
     "langPickerBase": `
@@ -1583,8 +1896,8 @@ xmlns:yt='http://gdata.youtube.com/schemas/2007'>
         <span>“${term}”</span>
     </div>`
     },
-    "latestChip": "8gYuGix6KhImCiQ2N2VlMmNlOS0wMDAwLTI5NWMtOTBjMy01ODI0MjliZTEzZWMgBA%3D%3D",
-    "popularChip": "8gYuGix6KhImCiQ2N2ViM2Y1NS0wMDAwLTI2ZWEtYjE4NS01ODI0MjliZTA1NjggAg%3D%3D",
+    "latestChip": "8gYuGix6KhImCiQ2N2FiOTYwMC0wMDAwLTI0N2QtYjAyYi01ODI0MjljNmI1ZjggBA%3D%3D",
+    "popularChip": "8gYuGix6KhImCiQ2N2FiOTYwMC0wMDAwLTI0N2QtYjAyYi01ODI0MjljNmI1ZjggAg%3D%3D",
     "replyTemplate": function(commentIndex, video, loginSimulateName) {
         return `
     <div id="div_comment_form_id_${commentIndex}">
@@ -2431,7 +2744,7 @@ xmlns:yt='http://gdata.youtube.com/schemas/2007'>
             <div id="feed_hometown">
                 <div class="fm2-title-border-box-gray yt-rounded">
                     <div class="fm2-title">
-                        <img class="homepage-sprite img_feed_hometown" src="/assets/site-assets/pixel-vfl73.gif">
+                        <img class="homepage-sprite img_feed_hometown fmt2-icon" src="/assets/site-assets/pixel-vfl73.gif">
                         <span class="fm2-titleText" id="feed_hometown-titleText">Videos Near You</span>
                     </div>
                     <div class="feedmodule-updown">
@@ -2500,7 +2813,7 @@ xmlns:yt='http://gdata.youtube.com/schemas/2007'>
             <h2>Choose your content location</h2><br>
             <p style="clear: left;">Choose which country or region's content (videos and channels) you would like to view. This will not change the language of the site.</p>
             <div class="box-close-link">
-                <img onclick="closeLangPicker()" src="/assets/site-assets/pixel-vfl73.gif" alt="Close">
+                <img onclick="closeLocPicker()" src="/assets/site-assets/pixel-vfl73.gif" alt="Close">
             </div>
             <div class="clearR"></div>
         </div>
@@ -2696,6 +3009,7 @@ xmlns:yt='http://gdata.youtube.com/schemas/2007'>
         <author>
             <name>auth_required</name>
             <uri>http://gdata.youtube.com/feeds/api/users/auth_required</uri>
+            <yt:userId>UCBR8-60-B28hp2BmDPdntcQ</yt:userId>
         </author>
         <gd:comments>
             <gd:feedLink href='http://${config.ip}:${config.port}/feeds/api/videos/12345678901/comments' countHint='530'/>
@@ -2712,11 +3026,757 @@ xmlns:yt='http://gdata.youtube.com/schemas/2007'>
             <yt:duration seconds='25'/>
             <yt:videoid id='12345678901'>12345678901</yt:videoid>
             <youTubeId id='12345678901'>12345678901</youTubeId>
+            <yt:uploaded>${new Date().toISOString()}</yt:uploaded>
+            <yt:uploaderId>UCBR8-60-B28hp2BmDPdntcQ</yt:uploaderId>
             <media:credit role='uploader' name='auth_required'>auth_required</media:credit>
         </media:group>
         <gd:rating average='5' max='5' min='1' numRaters='1' rel='http://schemas.google.com/g/2005#overall'/>
         <yt:statistics favoriteCount="0" viewCount="0"/>
         <yt:rating numLikes="0" numDislikes="0"/>
     </entry>`
+    },
+
+    "gdata_subscriptionChannel": function(name, avatar, id, handle) {
+        let fname = handle ? handle : utils.asciify(name)
+        return `
+        <entry>
+            <category scheme='http://gdata.youtube.com/schemas/2007/subscriptiontypes.cat'
+term='channel'/>
+            <content type='application/atom+xml;type=feed' src='http://${config.ip}:${config.port}/feeds/api/users/${fname}/videos'/>
+            <link rel='edit' href='http://${config.ip}:${config.port}/edit'/>
+            <yt:username>${fname}</yt:username>
+            <y9id>${id}</y9id>${avatar ? `
+            <y9av>${avatar}</y9av>` : ""}
+        </entry>`
+    },
+
+    "baseFeed_feedStart": function(feedName, videoCount) {
+        return `<?xml version='1.0' encoding='UTF-8'?>
+<rss xmlns:atom='http://www.w3.org/2005/Atom' xmlns:openSearch='http://a9.com/-/spec/opensearchrss/1.0/' version='2.0'>
+    <channel>
+        <description></description>
+        <atom:id>http://gdata.youtube.com/feeds/base/standardfeeds/most_popular</atom:id>
+        <lastBuildDate>${new Date().toString().split(" (")[0]}</lastBuildDate>
+        <category domain='http://schemas.google.com/g/2005#kind'>http://gdata.youtube.com/schemas/2007#video</category>
+        <title>${feedName}</title>
+        <image>
+            <url>http://www.youtube.com/img/pic_youtubelogo_123x63.gif</url>
+            <title>${feedName}</title>
+            <link>http://www.youtube.com/browse?s=bzb</link>
+        </image>
+        <link>http://www.youtube.com/browse?s=bzb</link>
+        <managingEditor>YouTube</managingEditor>
+        <generator>YouTube data API</generator>
+        <openSearch:totalResults>${videoCount}</openSearch:totalResults>
+        <openSearch:startIndex>1</openSearch:startIndex>
+        <openSearch:itemsPerPage>${videoCount}</openSearch:itemsPerPage>`
+    },
+
+    "baseFeed_feedVideo": function(video, categoryNumber, notFeed) {
+        function safeData(i, override) {
+            i = i.split(">").join(override ? override : "&amp;gt;")
+                 .split("<").join(override ? override : "&amp;lt;")
+                 .split("&").join(override ? override : "&amp;")
+                 .split("'").join("")
+                 .split("\"").join(override ? override : "&quot;")
+            return i;
+        }
+
+        let fcount = Math.round(parseInt(video.viewCount) / 15)
+        if(parseInt(video.viewCount) > 100000) { 
+            fcount = Math.round(parseInt(video.viewCount) / 90)
+        }
+
+        let description = `<div style="color: #000000;font-family: Arial, Helvetica, sans-serif; font-size:12px; font-size: 12px; width: 555px;">
+            <table cellspacing="0" cellpadding="0" border="0">
+                <tbody>
+                    <tr>
+                        <td width="140" valign="top" rowspan="2">
+                            <div style="border: 1px solid #999999; margin: 0px 10px 5px 0px;"><a href="http://${config.ip}:${config.port}/watch?v=${video.id}"><img alt="" src="http://i.ytimg.com/vi/${video.id}/2.jpg"></a></div>
+                        </td>
+                        <td width="256" valign="top">
+                            <div style="font-size: 12px; font-weight: bold;"><a style="font-size: 15px; font-weight: bold; font-decoration: none;" href="http://${config.ip}:${config.port}/watch?v=${video.id}">${safeData(video.title, "")}</a><br>
+                            </div>
+                            <div style="font-size: 12px; margin: 3px 0px;"><span>${safeData(video.description, "")}</span></div>
+                        </td>
+                        <td style="font-size: 11px; line-height: 1.4em; padding-left: 20px; padding-top: 1px;" width="146" valign="top">
+                            <div><span style="color: #666666; font-size: 11px;">From:</span>
+                                <a href="http://${config.ip}:${config.port}/channel/${video.author_id}">${video.author_name}</a>
+                            </div>
+                            <div><span style="color: #666666; font-size: 11px;">Views:</span>${video.viewCount}</div>
+                            <div style="white-space: nowrap;text-align: left"><img style="border: 0px none; margin: 0px; padding: 0px; vertical-align: middle; font-size: 11px;" align="top" alt="" src="http://${config.ip}:${config.port}/assets/site-assets/icn_star_full_11x11.gif"> <img style="border: 0px none; margin: 0px; padding: 0px; vertical-align: middle; font-size: 11px;" align="top" alt="" src="http://${config.ip}:${config.port}/assets/site-assets/icn_star_full_11x11.gif"> <img style="border: 0px none; margin: 0px; padding: 0px; vertical-align: middle; font-size: 11px;" align="top" alt="" src="http://${config.ip}:${config.port}/assets/site-assets/icn_star_full_11x11.gif"> <img style="border: 0px none; margin: 0px; padding: 0px; vertical-align: middle; font-size: 11px;" align="top" alt="" src="http://${config.ip}:${config.port}/assets/site-assets/icn_star_full_11x11.gif"> <img style="border: 0px none; margin: 0px; padding: 0px; vertical-align: middle; font-size: 11px;" align="top" alt="" src="http://${config.ip}:${config.port}/assets/site-assets/icn_star_full_11x11.gif"></div>
+                            <div style="font-size: 11px;">${fcount}<span style="color: #666666; font-size: 11px;">ratings</span>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><span style="color: #666666; font-size: 11px;">Time:</span>
+                            <span style="color: #000000; font-size: 11px; font-weight: bold;">${utils.seconds_to_time(video.length)}</span>
+                        </td>
+                        <td style="font-size: 11px; padding-left: 20px;"><span style="color: #666666; font-size: 11px;">More in</span>
+                            <a href="http://${config.ip}:${config.port}/videos?c=${categoryNumber}">${video.category.split("&").join("")}</a>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>`
+
+        if(notFeed) {
+            return `<?xml version='1.0' encoding='UTF-8'?>
+        <entry xmlns='http://www.w3.org/2005/Atom'>
+            <id>http://gdata.youtube.com/feeds/base/videos/--5psRI6Yx8</id>
+            <published>${video.upload}</published>
+            <updated>${video.upload}</updated>
+            <category scheme='http://schemas.google.com/g/2005#kind' term='http://gdata.youtube.com/schemas/2007#video' />
+            <title type='text'>${safeData(video.title)}</title>
+            <content type='html'>${utils.xss(description)}</content>
+            <link rel='alternate' type='text/html' href='http://${config.ip}:${config.port}/watch?v=${video.id}' />
+            <link rel='self' type='application/atom+xml' href='http://gdata.youtube.com/feeds/base/videos/${video.id}' />
+            <author>
+                <name>${safeData(video.author_name)}</name>
+                <uri>http://gdata.youtube.com/feeds/base/users/${video.author_id}</uri>
+            </author>
+        </entry>`
+        }
+
+        return `
+        <item>
+            <guid isPermaLink='false'>http://gdata.youtube.com/feeds/base/videos/F35L1dZtxjI</guid>
+            <pubDate>${new Date(video.upload).toString().split(" (")[0]}</pubDate>
+            <atom:updated>${video.upload}</atom:updated>
+            <category domain='http://schemas.google.com/g/2005#kind'>http://gdata.youtube.com/schemas/2007#video</category>
+            <title>${safeData(video.title)}</title>
+            <description>${utils.xss(description)}</description>
+            <link>http://${config.ip}:${config.port}/watch?v=${video.id}</link>
+            <author>${safeData(video.author_name)}</author>
+        </item>`
+    },
+
+    "baseFeed_feedEnd": `
+    </channel>
+</rss>`,
+
+    "pchelper_accounts": function(accounts) {
+        let html = `<table id="account-list">`
+        let firstMarked = false;
+        let selectedName = ""
+        let selectedHandle = ""
+        accounts.forEach(a => {
+            let name = a.name;
+            if(name.length > 26) {
+                name = name.substring(0, 26) + "..."
+            }
+            if(a.selected) {
+                selectedName = a.name;
+                selectedHandle = (a.handle ? a.handle : "").replace("@", "");
+            }
+            let avatar = "/assets/site-assets/default.png"
+            if(a.avatar && require("fs").existsSync(".." + a.avatar)) {
+                avatar = a.avatar;
+            }
+            html += `<tr class="account" data-pageid="${a.pageId}">
+            <td><img src="${avatar}"/><span id="account-name">${name}</span></td>
+            <td class="selector">${a.selected
+            ? `<span class="selected-label">Selected</span>`
+            : `<a class="yt-button yt-button-primary"
+				href="#" onclick="login_change('${a.pageId}','${name.split("'").join("\"")}',${!firstMarked ? "true" : "false"})">
+				<span>Select</span>
+			</a>`}</td>
+        </tr>`
+            firstMarked = true;
+        })
+        html += `</table>`
+        if(selectedName && selectedHandle) {
+            html += `
+        <div id="login-simulate-autopicker">
+            <h3>want to adjust your login name on yt2009?</h3>
+            <a class="yt-button yt-button-primary" href="#" onclick="login_sim_change('${selectedName.split("'").join("\\'")}')">
+				<span>${utils.xss(selectedName)}</span>
+			</a>
+            <a class="yt-button yt-button-primary" href="#" onclick="login_sim_change('${selectedHandle.split("'").join("\\'")}')">
+				<span>${utils.xss(selectedHandle)}</span>
+			</a>
+        </div>`
+        }
+        return html;
+    },
+
+    "insightMap": `<div class="feedmodule-anchor" id="feedmodule-IMN">
+    <div class="feedmodule-modheader" id="IMN-titlebar">
+        <div id="feed_insight_map">
+            <div class="fm2-title-border-box-gray yt-rounded">
+                <div class="fm2-title">
+                    <img src="/assets/site-assets/pixel-vfl73.gif" class="homepage-sprite img_feed_insight_map fm2-icon">
+                    <span class="fm2-titleText" id="feed_insight_map-titleText">Insight: Statistics and Data</span>
+                </div>
+                <div class="feedmodule-updown">
+                    <span id="mup-IMN" class="up-button" onclick="moveUp('insmap')">
+                        <img class="master-sprite img-php-up-arrow" src="/assets/site-assets/pixel-vfl73.gif"></span>
+                    <span id="mdown-IMN" class="down-button" onclick="moveDown('insmap')">
+                        <img class="master-sprite img-php-down-arrow" src="/assets/site-assets/pixel-vfl73.gif"></span>
+                    <span id="mclose-IMN" onclick="removeModule('insmap')">
+                        <img class="master-sprite img-php-close-button" src="/assets/site-assets/pixel-vfl73.gif"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="clear feedmodule-border-gray yt-rounded" id="feed_insight_map-content">
+        <div class="feedmodule-data" id="IMN-data">
+            <div class="feedmodule-body compressed-view" id="feed_insight_map-body">
+                <span class="feedmodule-maintext">How popular were your videos, relative to those of other uploaders, in the last 7 days?</span>
+                <div class="spacer">&nbsp;</div>
+                <div class="feedmodule-chart"><img src="/assets/site-assets/pixel-vfl73.gif" class="feedmodule-border-gray"></div>
+                <div class="feedmodule-next"></div>
+                <div class="spacer">&nbsp;</div>
+            </div>
+        </div>
+    </div>
+    <div class="clear"></div>
+</div>`,
+
+    "insightChart": `<div class="feedmodule-anchor" id="feedmodule-IMC">
+        <div class="feedmodule-modheader" id="IMC-titlebar">
+            <div id="feed_insight_chart">
+                <div class="fm2-title-border-box-gray yt-rounded">
+                    <div class="fm2-title">
+                        <img src="/assets/site-assets/pixel-vfl73.gif" class="homepage-sprite img_feed_insight_chart fm2-icon">
+                        <span class="fm2-titleText" id="feed_insight_chart-titleText">Insight: Statistics and Data</span>
+                    </div>
+                    <div class="feedmodule-updown">
+                        <span id="mup-IMC" class="up-button" onclick="moveUp('inschrt')">
+                            <img class="master-sprite img-php-up-arrow" src="/assets/site-assets/pixel-vfl73.gif"></span>
+                        <span id="mdown-IMC" class="down-button" onclick="moveDown('inschrt')">
+                            <img class="master-sprite img-php-down-arrow" src="/assets/site-assets/pixel-vfl73.gif"></span>
+                        <span id="mclose-IMC" onclick="removeModule('inschrt')">
+                            <img class="master-sprite img-php-close-button" src="/assets/site-assets/pixel-vfl73.gif"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="clear feedmodule-border-gray yt-rounded" id="feed_insight_chart-content">
+            <div class="feedmodule-data" id="IMC-data">
+                <div class="feedmodule-body compressed-view" id="feed_insight_chart-body">
+                    <span class="feedmodule-maintext">Views for all of your videos for the last 7 days</span>
+                    <div class="spacer">&nbsp;</div>
+                    <div class="feedmodule-chart"><div class="feedmodule_chart_crop_big feedmodule-border-gray">
+                        <img src="/assets/site-assets/pixel-vfl73.gif"/>
+                    </div></div>
+                    <div class="feedmodule-next"></div>
+                    <div class="spacer">&nbsp;</div>
+                </div>
+            </div>
+        </div>
+        <div class="clear"></div>
+    </div>`,
+
+    "bareHTML_map": function(chartUrl, topCountries, viewChart) {
+        return `<span class="feedmodule-maintext">How popular were your videos, relative to those of other uploaders, in the last 7 days?</span>
+        <div class="spacer">&nbsp;</div>
+        <div class="feedmodule-chart"><img src="${chartUrl}" class="feedmodule-border-gray"></div>
+        <div class="feedmodule-next">
+            ${topCountries && topCountries[0] ? `<div class="feedmodule-next-section">
+                <span class="bold">Your videos were most popular in</span>
+                <div class="spacer">&nbsp;</div>
+                <span class="feedmodule-stext">${topCountries[0] ? topCountries[0][0] : ""}</span>
+            </div>` : ""}
+            <div class="feedmodule-next-section">
+                <span class="bold">Total Views</span>
+                <div class="spacer">&nbsp;</div>
+                <div class="feedmodule_chart_crop_small">
+                    <img src="${viewChart}"/>
+                </div>
+            </div>
+        </div>
+        <div class="spacer">&nbsp;</div>`
+    },
+
+    "bareHTML_chart": function(chartUrl, topCountries, topVideos, genders) {
+        let topVList = ""
+        if(topVideos && topVideos[0]) {
+            topVideos.slice(0,3).forEach(v => {
+                let id = ""
+                try {
+                    id = v.videoEndpoint.innertubeCommand.watchEndpoint.videoId
+                    topVList += `<li><a href="/watch?v=${id}">${v.videoTitle}</a></li>`
+                }
+                catch(error) {}
+            })
+        }
+        let topGList = ""
+        if(genders && genders[0]) {
+            genders.forEach(g => {
+                topGList += `<li><span class="feedmodule-stext">${g.label} - ${g.displayValue}</span></li>`
+            })
+        }
+        let topCountriesFormatted = []
+        topCountries.forEach(tc => {
+            topCountriesFormatted.push(tc[0])
+        })
+        topCountriesFormatted = topCountriesFormatted.join(", ")
+        return `<span class="feedmodule-maintext">Views for all of your videos for the last 7 days</span>
+        <div class="spacer">&nbsp;</div>
+        <div class="feedmodule-chart"><div class="feedmodule_chart_crop_big feedmodule-border-gray">
+            <img src="${chartUrl}"/>
+        </div></div>
+        <div class="feedmodule-next">
+            ${topVideos && topVideos[0] ? `<div class="feedmodule-next-section">
+                <span class="bold">Most watched videos</span>
+                <div class="spacer">&nbsp;</div>
+                <ol>${topVList}</ol>
+            </div>` : ""}
+            ${topCountries && topCountries[0] ? `<div class="feedmodule-next-section">
+                <span class="bold">Your videos were most viewed in</span>
+                <div class="spacer">&nbsp;</div>
+                <span class="feedmodule-stext">${topCountriesFormatted}</span>
+            </div>` : ""}
+            ${genders && genders[0] ? `<div class="feedmodule-next-section">
+                <span class="bold">Your videos were most viewed by</span>
+                <div class="spacer">&nbsp;</div>
+                <ol>${topGList}</ol>
+            </div>` : ""}
+        </div>
+        <div class="spacer">&nbsp;</div>`
+    },
+    "ssr_yt_playlist": function(videos, autogen, proxy, customIndex) {
+        let html = ""
+        let i = customIndex || 0;
+        videos.forEach(v => {
+            let thumbUrl = `//i.ytimg.com/vi/${v.id}/${autogen ? "1.jpg" : "default.jpg"}`
+            if(proxy) {
+                thumbUrl = `/get_still.php?video_id=${v.id}`
+            }
+            html += `
+<tr class="video ${i % 2 == 0 ? "even" : "odd"}" data-videoid="${v.id}">
+    <td id="heading-check" class="first heading">
+        <div><input id="all-items-checkbox" type="checkbox" onclick="" data-videoid="${v.id}"/></div>
+    </td>
+    <td id="heading-position" class="heading">
+        <div style="text-align: center;"><a href="#" style="text-align: center;font-size: 14px;"><b>${i + 1}</b></a></div>
+    </td>
+    <td id="heading-title" class="heading">
+        <button title="" class="master-sprite"></button>
+        <a href="/watch?v=${v.id}" style="height: 40px;overflow: hidden;" rel="nofollow"><img src="${thumbUrl}"></a>
+        <a href="/watch?v=${v.id}" class="video-title">${utils.xss(v.title)}</a>
+    </td>
+    <td id="heading-time" class="heading">
+        <div>${v.time}</div>
+    </td>
+    <td id="heading-date" class="heading">
+        <div>${v.date}</div>
+    </td>
+    <td id="heading-views" class="heading">
+        <div>${v.viewCount}</div>
+    </td>
+    <td id="heading-rating" class="heading">
+        <div><div class="video-stat"><span class="stat-rating"><img class="yt-rating-${v.rating}" src="/assets/site-assets/pixel-vfl73.gif" alt="${v.rating}" /></span></div></div>
+    </td>
+</tr>`
+            i++
+        })
+        return html;
+    },
+    "playerHDLive": function(id, use720p, autoHQ) {
+        return `
+        //exp_hq
+        seekbarRemoveWidth = 245;
+        adjustSeekbarWidth();
+        var liveHd = false;
+
+        ${autoHQ ? `
+        liveHd = true;` : ""}
+
+        // hd/hq playback
+        $(".video_controls .hq").addEventListener("click", function() {
+            video_pause();
+
+            if(!liveHd) {
+                liveHd = true;
+                $("video").innerHTML = "";
+                initAsLive("${id}")
+                $(".video_controls .hq").className = "hq ${use720p ? "hd" : ""} enabled"
+                //video_play()
+            } else {
+                liveHd = false;
+                $("video").innerHTML = "";
+                initAsLive("${id}")
+                $(".video_controls .hq").className = "hq ${use720p ? "hd" : ""}"
+                //video_play()
+            }
+        }, false)`
+    },
+    
+    "liveChatMessage": function(msg) {
+        return `<tr class="live-chat-message">
+            <td class="author-username">
+                <a href="/channel/${msg.authorId}">${msg.authorName}</a>
+            </td>
+            <td class="message-content">
+                <span>${msg.msg}</span>
+            </td>
+        </tr>`
+    },
+
+    "livechatTemplate": `<div id="watch-live-chat-panel" class="watch-discoverbox-wrapper yt-uix-expander " data-expander-action="watchTogglePanel" data-discoverbox-type="live" data-discoverbox-username="">
+		<h2 class="yt-uix-expander-head" onclick="toggleExpander(this)">
+			<button title="" class="yt-uix-expander-arrow master-sprite"></button>
+			<span>Live Chat</span>
+		</h2>
+		<div id="watch-live-chat-body" class="watch-discoverbox-body mini-list-view yt-uix-expander-body">
+			<div id="watch-live-discoverbox" class="watch-discoverbox" style="height:432px">
+				<table id="live-chat-t"><tbody></tbody></table>
+			</div>
+		</div>
+		<div class="clearL"></div>
+	</div>`,
+
+    "recentActivityHead": `<div class="inner-box" id="user_recent_activity">
+	<div style="zoom:1">
+		<div class="box-title title-text-color">Recent Activity &nbsp;</div>
+		<div style="float:right;zoom:1;_display:inline;white-space:nowrap"><div style="float:right"></div></div>
+		<div class="cb"></div>
+	</div>
+	<div id="user_recent_activity-messages" style="color:#333;margin:1em;padding:1em;display:none"></div>
+	<div id="user_recent_activity-body">
+		<div id="feed_success" style="display: none;">Successfully removed.</div>
+		<div id="feed_success_custom" style="display: none;"></div>
+		<div id="feed_error" style="display: none;">Sorry, an error occurred.</div>
+		<div id="feed_error_custom" style="display: none;"></div>
+		<div id="feed_loading" style="display: none; text-align: center;"><img src="/assets/site-assets/icn_loading_animated-vfl24663.gif"></div>
+		<div id="feed_table">
+			<div class="text-field recent-activity-content outer-box-bg-as-border">
+				<table border="0" cellspacing="0" cellpadding="0" width="97%">
+					<tbody>`,
+    
+    "recentActivityPost": function(p, index, req) {
+        //console.log(p)
+        let imagesHTML = ""
+        if(p.attachments) {
+            p.attachments.forEach(img => {
+                if(img.imageAttachmentSmall) {
+                    imagesHTML += `<div style="float:left; margin-right: 8px;"><img class="feed-image" src="/avatar_wait?av=${encodeURIComponent(img.imageAttachmentSmall)}"/></div>`
+                }
+            })
+        }
+        return `<tr id="feed_item_${index}" valign="top">
+			<td class="feed_icon"><img src="/assets/site-assets/pixel-vfl73.gif" class="icon-BUL"></td>
+			<td>
+				<div class="feed_title">
+					${p.authorText}
+                    <span class="feed-content">${p.text}</span>
+					<span class="timestamp">(${p.time})</span>
+				</div>
+				<div class="centerpiece">
+                    ${imagesHTML}
+                    ${p.embedVideoId && p.embedVideoTitle ? 
+                    `<div style="float:left; margin-right: 8px;"><a href="/watch?v=${p.embedVideoId}" rel="nofollow"><img style="width: 60px; height: 45px; border: 1px solid;" src="${utils.getThumbUrl(p.embedVideoId, req)}" class="link-as-border-color"></a></div>
+					<div>
+						<a href="/watch?v=${p.embedVideoId}" rel="nofollow">${p.embedVideoTitle}</a>
+					</div>` : ""}
+				</div>
+			</td>
+			<td class="feed_delete">&nbsp;</td>
+		</tr>
+
+		<tr id="feed_divider_${index}">
+			<td colspan="3" class="outer-box-bg-as-border divider">&nbsp;</td>
+		</tr>`
+
+        /*<div>
+						<span id="feed_item_UgY69lf0UCE_collapsed">
+							ALTERNATE ENDING &amp; DELETED SCENE: <a href="http://web.archive.org/web/20091124022218/http://smosh.com/videos" target="_blank" title="http://smosh.com/videos" rel="nofollow" dir="ltr">http://smosh.com/videos</a><br><br>Can we survive a frickin' zombie apocalypse? See if we make it in our new video!<br><br><a href="http://web.archive.org/web/20091124022218/http://smosh.com/" target="_blank" title="http://smosh.com" rel="nofollow" dir="ltr">http:/...</a>
+							&nbsp;
+							<a href="#" onclick="_hidediv('feed_item_UgY69lf0UCE_collapsed'); _showdiv('feed_item_UgY69lf0UCE_expanded'); return false;" style="font-size: 10px;" class="hLink">more</a>
+						</span>
+						<span id="feed_item_UgY69lf0UCE_expanded" style="display:none">
+							ALTERNATE ENDING &amp; DELETED SCENE: <a href="http://web.archive.org/web/20091124022218/http://smosh.com/videos" target="_blank" title="http://smosh.com/videos" rel="nofollow" dir="ltr">http://smosh.com/videos</a><br><br>Can we survive a frickin' zombie apocalypse? See if we make it in our new video!<br><br><a href="http://web.archive.org/web/20091124022218/http://smosh.com/" target="_blank" title="http://smosh.com" rel="nofollow" dir="ltr">http://smosh.com</a><br><a href="http://web.archive.org/web/20091124022218/http://twitter.com/smosh" target="_blank" title="http://twitter.com/smosh" rel="nofollow" dir="ltr">http://twitter.com/smosh</a><br><a href="http://web.archive.org/web/20091124022218/http://facebook.com/smosh" target="_blank" title="http://facebook.com/smosh" rel="nofollow" dir="ltr">http://facebook.com/smosh</a><br><a href="http://web.archive.org/web/20091124022218/http://myspace.com/smosh" target="_blank" title="http://myspace.com/smosh" rel="nofollow" dir="ltr">http://myspace.com/smosh</a>
+							&nbsp;
+							<a href="#" onclick="_hidediv('feed_item_UgY69lf0UCE_expanded'); _showdiv('feed_item_UgY69lf0UCE_collapsed'); return false;" style="font-size: 10px;" class="hLink">less</a>
+						</span>
+					</div>*/
+    },
+
+    "recentActivityEnd": `</tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="clear"></div>
+    </div>`,
+
+    "playerHDSabr": function(use720p, autoHQ, videoLengthMinutes, srData, exactData) {
+        let seekbarRemoveWidth = 245
+        if(videoLengthMinutes && videoLengthMinutes >= 100) {
+            seekbarRemoveWidth = 265
+        } else if(videoLengthMinutes && videoLengthMinutes >= 10) {
+            seekbarRemoveWidth = 255
+        }
+		if(srData) {
+			srData = srData.map(s => {
+				let z = JSON.parse(JSON.stringify(s))
+				z[2] = z[2].split("\"").join("\\\"")
+				return z;
+			})
+		}
+        if(exactData) {
+            exactData = exactData.map(s => {
+                let z = JSON.parse(JSON.stringify(s))
+                z[4] = z[4].split("\"").join("\\\"")
+                return z;
+            })
+        }
+        return `
+        //exp_hq
+        seekbarRemoveWidth = ${seekbarRemoveWidth};
+        adjustSeekbarWidth();
+        var sabrHd = false;
+		${srData ? `
+		var sabrSrData = '${JSON.stringify(srData)}';` : ""}
+        ${autoHQ ? `
+        sabrHd = true;` : ""}
+        ${exactData ? `
+        var sabrExactRes = '${JSON.stringify(exactData)}';` : ""}
+
+        // hd/hq playback
+        $(".video_controls .hq").addEventListener("click", function() {
+            if(!sabrHd) {
+                sabrHd = true;
+                sabrQualityChanged()
+                $("video").innerHTML = "";
+                $(".video_controls .hq").className = "hq ${use720p ? "hd" : ""} enabled"
+            } else {
+                sabrHd = false;
+                sabrQualityChanged()
+                $("video").innerHTML = "";
+                $(".video_controls .hq").className = "hq ${use720p ? "hd" : ""}"
+            }
+        }, false)`
+    },
+    "csRecommendedPagedHeadin": function(i) {
+        return `<div class="cs-video-grid page-${i} ${i !== 0 ? "hid" : ""}" id="cs-video-grid-page-${i}">`
+    },
+    "csRecommendedPagedA": `
+        <div class="searchFooterBox">
+            <div class="pagingDiv">
+                <span class="pagerLabel smallText label">Pages: </span>`,
+    "pagerClientside": function(pageNumber, pageCount, hidden) {
+        let html = `
+        <div class="searchFooterBox ${hidden ? "hid" : ""}" id="footer-pager-for-${pageNumber}">
+            <div class="pagingDiv">
+                <span class="pagerLabel smallText label">Pages: </span>`
+        for (let i = 0; i < pageCount; i++) {
+            if(pageNumber == i) {
+                html += `<span class="pagerCurrent">${i + 1}</span>`
+            } else {
+                html += `<a href="#" onclick="navClPage(${i}, ${pageCount})" class="pagerNotCurrent">${i + 1}</a>`
+            }
+        }
+        html += "</div></div>"
+        return html
+    },
+    "genericThemePickrCustomSelected": `<div id="custom" class="theme_selector_div theme_selected" style="font-family:Arial" onclick="set_theme_obj(this.id);">
+	<div style="background-color: #FFF;color:#000;padding: 3px;line-height:120%">
+		<div style="background-color: #D6D6D6;color: #666;padding:3px;font-size:10px">
+			<div style="float:right;width:4em;background-color:#FFF;font-size:9px;padding-left:1px;color:#000"><span style="color:#666;font-size:120%">A</span> &nbsp;<span style="color:#03C;text-decoration:underline">url</span><br>abc</div><span style="color:#03C;text-decoration:underline">url</span><br>abc
+		</div>
+	</div>
+	<div style="text-align:center;"><span class="theme_title" style="padding:2px;height:2em;overflow:hidden">Custom</span></div>
+</div>`,
+    "channelShowinfoBegin": `<div class="show_info" style="padding-top: 8px;border:0">
+        <table id="user-profile-honors" cellpadding="0" cellspacing="0">
+            <tbody>
+                <tr>
+                    <td width="20" valign="top"><img src="//s.ytimg.com/yt/img/icn_award_17x24-vfl10931.gif" border="0"></td>
+                    <td valign="top" style="font-size: 12px;">
+                        <span id="BeginvidDeschonors" style="" class="">`,
+    "channelShowinfoRow": function(text, link) {
+        return `<a href="${link}">${text}</a><br>`
+    },
+    "channelShowinfoEnd": `
+                        </span>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>`,
+    "watchSupIcon": `<span class="yt2009-sup-icon" title="yt2009 Supporter">♥</span>`,
+    "applyAboutProperties": function(code, description) {
+        let delim = "═"
+
+        // textbox-based properties
+        let textboxProperties = {
+            "Website": "website",
+            "Gender": "gender",
+            "Relationship": "relationship",
+            "Hometown": "hometown",
+            "City": "current-city",
+            "Country": "country",
+            "Zip": "zip-code",
+            "Occupation": "occupations",
+            "Companies": "companies",
+            "Schools": "schools",
+            "Hobbies": "interests",
+            "Movies": "fav-movies",
+            "Music": "fav-music",
+            "Books": "fav-books",
+            "Pronouns": "pronouns"
+        }
+        let textareaProperties = [
+            "occupations", "companies", "schools", "interests", "fav-movies",
+            "fav-music", "fav-books"
+        ]
+        for(let p in textboxProperties) {
+            if(description.includes(`${delim} ${p}: `)) {
+                let key = textboxProperties[p]
+                let value = description.split(`${delim} ${p}: `)[1]
+                                       .split(`\n${delim}`)[0]
+                                       .split("\n\n")[0];
+                if(textareaProperties.includes(key)) {
+                    code = code.replace(
+                        `<textarea name="${key}">`,
+                        `<textarea name="${key}">${utils.xss(value)}`
+                    )
+                } else {
+                    code = code.replace(
+                        `name="${key}" spellcheck="false" autocomplete="off">`,
+                        `name="${key}" spellcheck="false" autocomplete="off" value="${value.split("\"").join("&quot;")}">`
+                    )
+                }
+                /*description = description.replace(
+                    `${delim} ${p}: ${value}`, ""
+                )*/
+            }
+        }
+        
+        // custom handling for name
+        if(description.includes(`${delim} Name: `)) {
+            let value = description.split(`${delim} Name: `)[1]
+                                   .split(`\n${delim}`)[0]
+                                   .split("\n\n")[0].split(" ")
+            let last = value.pop()
+            let first = value.join(" ")
+            code = code.replace(
+                `name="first-name" spellcheck="false" autocomplete="off"`,
+                `name="first-name" value="${first.split("\"").join("&quot;")}" spellcheck="false" autocomplete="off"`
+            )
+            code = code.replace(
+                `name="last-name" spellcheck="false" autocomplete="off"`,
+                `name="last-name" value="${last.split("\"").join("&quot;")}" spellcheck="false" autocomplete="off"`
+            )
+        }
+
+        // dropdown-based properties
+        let dropdownValues = {
+            "Gender": {
+                "Male": "m",
+                "Female": "f"
+            },
+            "Relationship": {
+                "Single": "s",
+                "Taken": "t",
+                "Open": "o"
+            },
+            "Country": require("./geo/country-codes.json")
+        }
+        for(let p in dropdownValues) {
+            if(description.includes(`${delim} ${p}: `)) {
+                let value = description.split(`${delim} ${p}: `)[1]
+                                       .split(`\n${delim}`)[0]
+                                       .split("\n\n")[0];
+                value = dropdownValues[p][value]
+                code = code.replace(
+                    `<option value="${value}">`,
+                    `<option value="${value}" selected="">`
+                )
+            }
+        }
+
+        return code;
+    },
+
+    "commentReply": function(c) {
+        let sanitizedContent = utils.xss(c.content).split("$").join("&#36;")
+        if(sanitizedContent.length == 0) return "";
+        return `<div id="${c.commentId}" class="watch-comment-entry">
+	<div class="watch-comment-entry-reply">
+		<div class="watch-comment-head">
+			<div class="watch-comment-info">
+				<a class="watch-comment-auth" href="/channel/${c.authorId}" rel="nofollow">${utils.xss(c.authorName)}</a>
+				<span class="watch-comment-time"> (${c.time}) </span>
+				<a id="show_link_${c.commentId}" class="watch-comment-head-link" onclick="displayHideCommentLink('${c.commentId}')">Show</a>
+				<a id="hide_link_${c.commentId}" class="watch-comment-head-link" onclick="displayShowCommentLink('${c.commentId}')">Hide</a>
+			</div>
+			<span id="comment_spam_bug_${c.commentId}" class="watch-comment-spam-bug">Marked as spam</span>
+			<div id="reply_comment_form_id_${c.commentId}" class="watch-comment-action">
+			</div>
+			<div class="clearL"></div>
+		</div>
+		<div id="comment_body_${c.commentId}">
+			<div class="watch-comment-body">
+				<div>${sanitizedContent}</div>
+			</div>
+			<div id="div_comment_form_id_${c.commentId}"></div>
+		</div>
+	</div>
+</div>`
+    },
+
+    "replyHoldReplyCode": function(continuation, commentId) {
+        return `<a href="javascript:void(0)" onclick="loadReplies('${continuation}', this, '${commentId}');return false;" class="watch-replies-show-link">» lang_watch_replies_more</a>`
+    },
+
+    "playnavContMore": function(continuation) {
+        return `<div class="playnav-more" id="playnav-more-continuation"><a class="channel-cmd" href="#" onclick="playnav_more('${continuation}')">lang_playnav_more</a></div>`
+    },
+
+    "clientsideRydScript": `
+    var fullRating = 0;
+    var cdr;
+    if (window.XMLHttpRequest) {
+        cdr = new XMLHttpRequest()
+    } else {
+        cdr = new ActiveXObject("Microsoft.XMLHTTP");
     }
+    var id = location.href.split("v=")[1].split("&")[0].split("#")[0]
+    cdr.open("GET", "/ryd_request?r=" + Math.random())
+    cdr.setRequestHeader("source", location.href)
+    cdr.send(null)
+    cdr.onreadystatechange = function(e) {
+        if(cdr.readyState == 4 || this.readyState == 4 || e.readyState == 4) {
+            document.getElementById("ratingMessage").className = ""
+            var rating = cdr.responseText;
+            var btn = document.getElementById("ratingStars")
+                              .getElementsByTagName("button")[0];
+            btn.className = "yt2009-stars master-sprite ratingL ratingL-" + rating;
+            btn.setAttribute("title", rating)
+        }
+    }
+    `,
+
+    "get_video_info_onlyFlash": function(data, req, res) {
+        res.send(`status=ok
+length_seconds=${data.length}
+keywords=${data.tags.join(",").split("&").join("")}
+vq=None
+muted=0
+avg_rating=5.0
+thumbnail_url=${
+    encodeURIComponent(
+        `${req.protocol}://i.ytimg.com/vi/${req.query.video_id}/hqdefault.jpg`
+    )
+}
+allow_ratings=1
+hl=en
+ftoken=
+allow_embed=1
+token=amogus_flash_only
+plid=amogus_flash_only
+track_embed=0
+author=${data.author_name.split("&").join("")}
+title=${data.title.split("&").join("")}
+video_id=${req.query.video_id}`.split("\n").join("&"))
+    },
+    
+    "disabledCommentsNotice": `<div id="watch-comment-post">
+        <b>lang_watch_comments_disabled_notice</b>
+    </div>`
 }

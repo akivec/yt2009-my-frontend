@@ -13,7 +13,7 @@ let cache = require("./cache_dir/playlist_cache_manager")
 
 module.exports = {
     "innertube_get_data": function(id, callback) {
-        fetch(`https://www.youtube.com/youtubei/v1/browse?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8`, {
+        fetch(`https://www.youtube.com/youtubei/v1/browse?prettyPrint=false`, {
             "headers": constants.headers,
             "referrer": `https://www.youtube.com/`,
             "referrerPolicy": "strict-origin-when-cross-origin",
@@ -90,13 +90,13 @@ module.exports = {
         }
 
         code = code.replace(`<!--yt2009_video_entries-->`, videos_html)
-        code = doodles.applyDoodle(code)
+        code = doodles.applyDoodle(code, req)
         code = language.apply_lang_to_code(code, req)
 
         return code;
     },
 
-    "parsePlaylist": function(playlistId, callback) {
+    "parsePlaylist": function(playlistId, callback, sourceVideo) {
         if(cache.read()[playlistId]) {
             callback(JSON.parse(JSON.stringify(cache.read()[playlistId])))
             return JSON.parse(JSON.stringify(cache.read()[playlistId]));
@@ -112,7 +112,71 @@ module.exports = {
                 "videoCount": "",
                 "playlistId": playlistId
             }
+
+            if(playlistId.startsWith("RD") && sourceVideo) {
+                // special handling for radio playlists
+                //let ogId = playlistId.replace("RD", "")
+                fetch(`https://www.youtube.com/youtubei/v1/next`, {
+                    "headers": constants.headers,
+                    "referrer": `https://www.youtube.com/`,
+                    "referrerPolicy": "strict-origin-when-cross-origin",
+                    "body": JSON.stringify({
+                        "videoId": sourceVideo,
+                        "playlistId": playlistId,
+                        "context": constants.cached_innertube_context,
+                        "autonavState": "STATE_ON",
+                        "contentCheckOk": true,
+                        "racyCheckOk": true
+                    }),
+                    "method": "POST",
+                    "mode": "cors"
+                }).then(r => {r.json().then(r => {
+                    if(r.contents && r.contents.twoColumnWatchNextResults
+                    && r.contents.twoColumnWatchNextResults.playlist
+                    && r.contents.twoColumnWatchNextResults.playlist.playlist) {
+                        let p = r.contents.twoColumnWatchNextResults
+                                 .playlist.playlist;
+                        let vids = []
+                        p.contents.forEach(v => {
+                            if(v.playlistPanelVideoRenderer) {
+                                v = v.playlistPanelVideoRenderer
+                                try {
+                                    let thumb = [
+                                        "http://i.ytimg.com/vi/",
+                                        v.videoId,
+                                        "/hqdefault.jpg"
+                                    ].join("")
+                                    let by = v.shortBylineText.runs[0]
+                                    let byId = by.navigationEndpoint
+                                                 .browseEndpoint.browseId
+                                    vids.push({
+                                        "id": v.videoId,
+                                        "title": v.title.simpleText,
+                                        "thumbnail": thumb,
+                                        "uploaderName": by.text,
+                                        "uploaderId": byId,
+                                        "uploaderUrl": "/channel/" + byId,
+                                        "time": v.lengthText ?
+                                                v.lengthText.simpleText : "",
+                                        "views": "0"
+                                    })
+                                }
+                                catch(error) {console.log(error)}
+                            }
+                        })
+                        callback({"videos": vids})
+                    } else {
+                        callback(false)
+                    }
+                })})
+                return;
+            }
+
             this.innertube_get_data(playlistId, (r) => {
+                if(!r.contents) {
+                    callback(false)
+                    return;
+                }
                 let playlistArray = r.contents.twoColumnBrowseResultsRenderer
                                      .tabs[0].tabRenderer.content
                                      .sectionListRenderer.contents[0]
@@ -158,11 +222,12 @@ module.exports = {
                 videoList.lastUpdate = lastUpdate
                 videoList.videoCount = vidCount
 
-                // filmy
-
+                // vids
                 playlistArray.forEach(video => {
                     if(!video.playlistVideoRenderer) return;
                     video = video.playlistVideoRenderer
+                    if((video.videoInfo && !video.videoInfo.runs)
+                    || (!video.videoInfo)) return; //skip members-only?
                     videoList.videos.push({
                         "id": video.videoId,
                         "title": video.title.runs[0].text,
@@ -170,9 +235,20 @@ module.exports = {
                                     + video.videoId
                                     + "/hqdefault.jpg",
                         "uploaderName": video.shortBylineText.runs[0].text,
-                        "uploaderUrl": video.shortBylineText.runs[0]
-                                            .navigationEndpoint.browseEndpoint
-                                            .canonicalBaseUrl,
+                        "uploaderUrl": ((video.shortBylineText.runs[0]
+                                         .navigationEndpoint
+                                      && video.shortBylineText.runs[0]
+                                         .navigationEndpoint.browseEndpoint
+                                      && video.shortBylineText.runs[0]
+                                         .navigationEndpoint.browseEndpoint
+                                         .canonicalBaseUrl)||""),
+                        "uploaderId": ((video.shortBylineText.runs[0]
+                                         .navigationEndpoint
+                                      && video.shortBylineText.runs[0]
+                                         .navigationEndpoint.browseEndpoint
+                                      && video.shortBylineText.runs[0]
+                                         .navigationEndpoint.browseEndpoint
+                                         .browseId)||""),
                         "time": video.lengthText ?
                                 video.lengthText.simpleText : "",
                         "views": utils.approxSubcount(
@@ -188,6 +264,7 @@ module.exports = {
     },
 
     "create_cpb_xml": function(req, res) {
+        res.set("content-type", "application/atom+xml")
         let compatAuth = false;
         if((req.headers.referer && req.headers.referer.includes(".swf"))
         || (req.headers["user-agent"]
@@ -197,7 +274,23 @@ module.exports = {
         if(!compatAuth && !mobileauths.isAuthorized(req, res, "feed")) return;
         let id = req.originalUrl.split("playlists/")[1].split("?")[0]
         let xmlResponse = ""
+        if(id.length >= 10 && !id.startsWith("PL") && !id.startsWith("OL")) {
+            id = "PL" + id
+        }
         this.parsePlaylist(id, (data) => {
+
+            if(!data) {
+                res.sendStatus(404)
+                return;
+            }
+
+            if(req.query.alt == "json") {
+                require("./yt2009jsongdata").playlistVideos(
+                    data.videos, res, req.query.callback
+                )
+                return;
+            }
+
             xmlResponse += yt2009templates.cpbPlaylistsBegin(
                 data.name,
                 data.playlistId,
@@ -210,7 +303,7 @@ module.exports = {
                 data.description
             )
             let videoIndex = 1;
-            data.videos.forEach(video => {
+            (data.videos || []).forEach(video => {
                 xmlResponse += yt2009templates.cpbVideo(video, videoIndex)
                 videoIndex += 1
             })
@@ -219,6 +312,37 @@ module.exports = {
 
             res.set("content-type", "application/atom+xml")
             res.send(xmlResponse)
+        })
+    },
+
+    "apiV1_playlist": function(req, res) {
+        let id = req.query.id;
+        if(id.length >= 10 && !id.startsWith("PL") && !id.startsWith("OL")) {
+            id = "PL" + id
+        }
+        this.parsePlaylist(id, (data) => {
+            if(!data) {
+                res.sendStatus(404)
+                return;
+            }
+
+            let videos_xml = `<?xml version="1.0" encoding="utf-8"?>
+<ut_response status="ok">
+<video_list>`
+            let video_index = 1;
+            data.videos.forEach(v => {
+                videos_xml += yt2009templates.warpVideo(
+                    v.id, v.title, v.time, v.uploaderName,
+                    video_index, "", v.views, 5
+                )
+            
+                video_index++
+            })
+
+            videos_xml += `
+</video_list>
+</ut_response>`
+            res.send(videos_xml)
         })
     }
 }

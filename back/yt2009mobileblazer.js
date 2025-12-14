@@ -11,6 +11,7 @@ const channels = require("./yt2009channels")
 const templates = require("./yt2009templates")
 const videostab = require("./yt2009videos")
 const subfeed = require("./yt2009subscriptions")
+const trusted = require("./yt2009trustedcontext")
 
 module.exports = {
     // get homepage
@@ -66,6 +67,7 @@ module.exports = {
         // or some undefault_avatar?
         let disableOnlyOld = false;
         let undefaultAvatar = false;
+        let innertubeRelated = false;
         if(req.headers.cookie
         && req.headers.cookie.includes("blzr_watch_flags=")) {
             let flags = req.headers.cookie
@@ -77,9 +79,16 @@ module.exports = {
             if(flags.includes("undefault-avatar")) {
                 undefaultAvatar = true;
             }
+            if(flags.includes("innertube-related")) {
+                innertubeRelated = true
+            }
         }
 
         // static response stuff
+
+        let videoUrl = "/get_video?video_id=" + id + "/mp4"
+        videoUrl += trusted.urlContext(id, "PLAYBACK_STD", true)
+
         let response = {
             "result": "ok",
             "content": {
@@ -92,7 +101,7 @@ module.exports = {
                         "posy": 25
                     },
                     "id": id,
-                    "stream_url": "/get_video?video_id=" + id + "/mp4",
+                    "stream_url": videoUrl,
                     "is_playable": true
                 }
             }
@@ -134,35 +143,46 @@ module.exports = {
                 "duration": utils.seconds_to_time(data.length),
                 "user_image_url": avatar
             }
+
+            let hq_stream_url = false;
+            if(data.qualities.includes("720p")
+            || data.qualities.includes("720p60")
+            || data.qualities.includes("720p50")) {
+                hq_stream_url = "/exp_hd?video_id=" + id
+                hq_stream_url += trusted.urlContext(
+                    id, "PLAYBACK_HD", (data.length >= 60 * 15)
+                )
+            } else if(data.qualities.includes("480p")) {
+                hq_stream_url = "/get_480?video_id=" + id
+                hq_stream_url += trusted.urlContext(
+                    id, "PLAYBACK_HQ", (data.length >= 60 * 15)
+                )
+            }
+
+            if(hq_stream_url) {
+                video.hq_stream_url = hq_stream_url;
+            }
+
             for(let field in video) {
                 response.content.video[field] = video[field]
             }
 
             // related videos
-            // send video data after related done as those must be
-            // within the response unlike some other yt clients
-            let enableHQ = false;
-            expRelated(data, (videos) => {
-                response.content.related_videos = videos;
-                if(enableHQ) {
-                    // get qualities for an hq button
-                    try {
-                        yt2009html.get_qualities(id, (qualities) => {
-                            if(qualities.includes("480p")) {
-                                let url = "/get_480?video_id=" + id
-                                response.content.video.hq_stream_url = url;
-                            }
-                            res.send(response)
-                        })
-                    }
-                    catch(error) {
-                        res.send(response)
-                    }
-                } else {
+            if(innertubeRelated) {
+                let vids = []
+                data.related.forEach(v => {
+                    vids.push(templates.blazer_bareVideo(
+                        v.id, v.title, v.length, v.views, v.creatorName
+                    ))
+                })
+                response.content.related_videos = vids;
+                res.send(response)
+            } else {
+                expRelated(data, (videos) => {
+                    response.content.related_videos = videos;
                     res.send(response)
-                }
-                
-            })
+                })
+            }
         }, constants.headers["user-agent"], "",false, false, true)
 
         // blazer related (exp_related)
@@ -904,6 +924,40 @@ module.exports = {
 
             res.send(response)
         }}, true)
+    },
+
+    // search suggestions (no worky for now :( )
+    "suggest": function(req, res) {
+        res.set("content-type", "text/javascript")
+        let q = req.query.q
+        const fetch = require("node-fetch")
+        fetch("http://suggestqueries.google.com/complete/search?ds=yt&client=androidyt&hjson=t&oe=UTF-8&q=" + q, {
+            "headers": constants.headers
+        }).then(r => {r.json().then(r => {
+            let suggestions = []
+            let response = ""
+            if(req.query.jsonp) {
+                response = req.query.jsonp + "("
+            }
+            r.forEach(element => {
+                if(typeof(element) == "object"
+                && element.length) {
+                    element.forEach(s => {
+                        suggestions.push(s[0].replace(/\p{Other_Symbol}/gui, ""))
+                    })
+                }
+            })
+            suggestions = suggestions.sort((a, b) => {return a.length - b.length})
+            let ts = ["", [], 1]
+            suggestions.forEach(m => {
+                ts[1].push([0, m, 0, 0])
+            })
+            response += JSON.stringify(ts)
+            if(req.query.jsonp) {
+                response += ")"
+            }
+            res.send(response)
+        })})
     }
 
 }
