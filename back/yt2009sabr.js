@@ -5,6 +5,7 @@ const sabrResponsePb = require("./proto/sabr_response_pb")
 const yt2009utils = require("./yt2009utils")
 const yt2009signin = require("./yt2009androidsignin")
 const yt2009constants = require("./yt2009constants.json")
+const yt2009exports = require("./yt2009exports")
 const config = require("./config.json")
 const child_process = require("child_process")
 const audioItags = [139, 140]
@@ -148,7 +149,11 @@ module.exports = {
                 return (s.itag == 140 || s.itag == 139)
             })
             audioFmts = audioFmts.sort((a,b) => {
-                return b.totalbitrate - a.totalbitrate
+                if(b.totalbitrate) {
+                    return b.totalbitrate - a.totalbitrate;
+                } else {
+                    return b.bitrate - a.bitrate;
+                }
             })
 
             if(!audioFmts[0]) {
@@ -226,7 +231,7 @@ module.exports = {
                 fetch(r.sabrUrl, {
                     "method": "POST",
                     "headers": {
-                        "user-agent": "com.google.android.youtube/20.06.36 (Linux; U; Android 14) gzip"
+                        "user-agent": "com.google.android.youtube/20.51.39 (Linux; U; Android 14) gzip"
                     },
                     "body": protoReq
                 }).catch(e => {
@@ -273,14 +278,62 @@ module.exports = {
         if(req.query.force_replayer) {
             console.log(`[sabr/${playbackSession}] force replayer called!`)
         }
+        if(!players[p.id] && yt2009exports.read().players[p.id]) {
+            if(config.env == "dev") {
+                console.log(`using cached exports player for ${playbackSession}`)
+            }
+            players[p.id] = yt2009exports.read().players[p.id]
+            players[p.id].ustreamer = players[p.id].playerConfig
+                                      .mediaCommonConfig
+                                      .mediaUstreamerRequestConfig
+                                      .videoPlaybackUstreamerConfig
+            players[p.id].sabrUrl = players[p.id].streamingData
+                                    .serverAbrStreamingUrl
+            try {
+                let expiry = players[p.id].streamingData.adaptiveFormats[0]
+                             .url.split("expire=")[1].split("&")[0]
+                players[p.id].expiry = parseInt(expiry) * 1000
+            }
+            catch(error) {
+                if(players[p.id].streamingData
+                && players[p.id].streamingData.expiresInSeconds) {
+                    players[p.id].expiry = players[p.id].streamingData
+                                           .expiresInSeconds - 60
+                } else {
+                    let twoHours = 7200 * 1000
+                    players[p.id].expiry = Date.now() + twoHours
+                }
+            }
+        }
         if(players[p.id] && players[p.id].expiry - 60000 >= Date.now()
         && !req.query.force_replayer) {
-            //console.log(`using cached player for ${playbackSession}`)
+            /*if(config.env == "dev") {
+                console.log(`using cached sabr player for ${playbackSession}`)
+            }*/
             processPlayer(players[p.id])
         } else {
-            //console.log(`using clean player for ${playbackSession}`)
+            if(config.env == "dev") {
+                console.log(`using clean player for ${playbackSession}`)
+            }
+            if(config.wyjeba_typu_onesie) {
+                yt2009utils.wyjebaTypuOnesie(p.id, (data) => {
+                    data.sabrUrl = data.streamingData.serverAbrStreamingUrl;
+                    data.ustreamer = data.playerConfig.mediaCommonConfig
+                                         .mediaUstreamerRequestConfig
+                                         .videoPlaybackUstreamerConfig;
+                    if(data.sabrUrl && data.sabrUrl.includes("expire=")) {
+                        data.expiry = parseInt(
+                            data.sabrUrl.split("expire=")[1].split("&")[0]
+                        ) * 1000
+                    } else {
+                        data.expiry = Date.now() + (7200 * 1000) // 2 hrs
+                    }
+                    players[p.id] = data;
+                })
+                return;
+            }
             let rHeaders = JSON.parse(JSON.stringify(yt2009constants.headers))
-            rHeaders["user-agent"] = "com.google.android.youtube/20.06.36 (Linux; U; Android 14) gzip"
+            rHeaders["user-agent"] = "com.google.android.youtube/20.51.39 (Linux; U; Android 14) gzip"
             if(yt2009signin.needed() && yt2009signin.getData().yAuth) {
                 let d = yt2009signin.getData().yAuth
                 rHeaders.Authorization = `Bearer ${d}`
@@ -291,7 +344,8 @@ module.exports = {
                 fetch("https://youtubei.googleapis.com/youtubei/v1/player", {
                     "headers": rHeaders,
                     "method": "POST",
-                    "body": pbmsg
+                    "body": pbmsg,
+                    "agent": yt2009utils.createFetchAgent()
                 }).then(r => {r.buffer().then(b => {
                     let resp = playerResponsePb.root.deserializeBinary(b)
                     let formats = resp.toObject().formatsList[0]
@@ -387,9 +441,7 @@ module.exports = {
         context.setClientversion("20.06.36")
         context.setOsname("Android")
         context.setOsversion("10")
-        let unk = new requestProto.hwData()
-        unk.setId(1398091118)
-        context.addHw(unk)
+        //context.setHl("en")
         context.setGl("US")
         context.setUtcoffsetminutes(60)
         context.setTimezone("Europe/Warsaw")
@@ -414,7 +466,7 @@ module.exports = {
         return abrReq.serializeBinary()
     },
 
-    "parseResponse": function(r, fCallback, redirCallback) {
+    "parseResponse": function(r, fCallback, redirCallback, parseAsOnesieWyjebka) {
         // root ump parse logic
         // https://github.com/LuanRT/googlevideo/blob/main/src/core/UMP.ts
         // https://github.com/LuanRT/googlevideo/blob/main/src/core/ChunkedDataBuffer.ts
@@ -676,6 +728,23 @@ module.exports = {
             }
         }
 
+        if(parseAsOnesieWyjebka) {
+            let parts = []
+            let umpParse = new ump(new chunkedDataBuffer([r]))
+            umpParse.parse(function(part) {
+                var data = part.data.chunks[0]
+                var type = part.type
+                if(type == 11 && data.length > 100) {
+                    try {
+                        parts.push(require("zlib").gunzipSync(data))
+                    }
+                    catch(error){}
+                }
+            })
+            fCallback(parts)
+            return;
+        }
+
         let allParts = []
         let mediaHeaders = []
         let finalFragments = {}
@@ -839,3 +908,5 @@ module.exports = {
         parserStart()
     }
 }
+
+yt2009exports.writeData("umpParseFun", module.exports.parseResponse)

@@ -514,6 +514,9 @@ video.addEventListener("pause", function() {
 
 video.addEventListener("play", function() {
     video_show_play_btn()
+    if(window.sabrData && window.sabrData.fEnd) {
+        video.currentTime = 0;
+    }
 }, false)
 
 // play/pause animation
@@ -557,7 +560,8 @@ function timeUpdate() {
     if(window.usingModifiers && !window.modifiersAdded) {
         loadModifierTags()
     }
-    if(playingAsLive) return;
+    if(playingAsLive
+    || (window.sabrData && window.sabrData.seekToLength)) return;
     elapsedbar.style.width = (video.currentTime / video.duration) * 100 + "%"
     if(video.duration <= video.currentTime) {
         // ??
@@ -802,6 +806,10 @@ function mousedownf() {
 }
 
 function mouseup() {
+    if(window.sabrData && window.sabrData.seekToLength) {
+        video.currentTime = window.sabrData.seekToLength
+        window.sabrData.seekToLength = null;
+    }
     mousedown = false;
 }
 
@@ -815,8 +823,19 @@ function videoSeek(e) {
         }, 40)
         $(".seek_btn").className = "seek_btn hovered"
         var offsetX = e.pageX - seekbar.getBoundingClientRect().left;
-        video.currentTime = (offsetX / seekbar.getBoundingClientRect().width)
-                            * video.duration
+        if(window.sabrData) {
+            var tc = (offsetX / seekbar.getBoundingClientRect().width)
+                     * video.duration
+            elapsedbar.style.width = (tc / video.duration) * 100 + "%"
+            if(tc == 0) {
+                tc = 0.01
+            }
+            sabrData.seekToLength = tc;
+        } else {
+            video.currentTime = (offsetX / seekbar.getBoundingClientRect().width)
+                                * video.duration
+        }
+        
     } else {
         $(".seek_btn").className = "seek_btn"
     }
@@ -839,9 +858,9 @@ $(".video_controls .seek_btn").addEventListener("mouseup", mouseup, false)
 
 // normal click
 function click_seek(e) {
-    mousedown = true;
+    mousedownf()
     videoSeek(e)
-    mousedown = false;
+    mouseup()
 }
 
 seekbar.addEventListener("click", click_seek, false)
@@ -1317,33 +1336,57 @@ function initPopoutFadeout() {
         && !checkBounds($(".captions_popup"), mouse_left, mouse_top)
         && parseInt(player_add_popout.style.bottom) >= 25
         && !player_add_popout_debounce) {
-            $(".captions_popup").style.display = "none"
-            player_add_popout_debounce = true;
             setTimeout(function() {
-                non_css_anim_remove(player_add_popout, "bottom", 25, -59)
-            }, 200)
-            setTimeout(function() {
-                player_add_popout_debounce = false;
-            }, 300)
+                if((lastMousePosition[1]
+                && !checkBounds(
+                    player_add_popout,
+                    lastMousePosition[0],
+                    lastMousePosition[1]
+                ) && !checkBounds(
+                    $(".captions_popup"),
+                    lastMousePosition[0],
+                    lastMousePosition[1]
+                )) || !lastMousePosition[1]) {
+                    $(".captions_popup").style.display = "none"
+                    player_add_popout_debounce = true;
+                    setTimeout(function() {
+                        non_css_anim_remove(
+                            player_add_popout, "bottom", 25, -59
+                        )
+                    }, 200)
+                    setTimeout(function() {
+                        player_add_popout_debounce = false;
+                    }, 300)
+                    mousedown = false;
+                    $(".seek_btn").className = "seek_btn"
+                }
+            }, 100)
         }
 
         // VOLUME PANEL
         if(!checkBounds(volume_panel, mouse_left, mouse_top)
         && parseInt(volume_panel.style.bottom) >= 25
         && !volume_popping) {
-            volume_up = false;
-            volume_popping = true;
             setTimeout(function() {
-                non_css_anim_remove(volume_panel, "bottom", 25, -64)
-            }, 200)
-            setTimeout(function() {
-                volume_popping = false;
-            }, 500)
+                if((lastMousePosition[1]
+                && !checkBounds(
+                    volume_panel,
+                    lastMousePosition[0],
+                    lastMousePosition[1]
+                )) || !lastMousePosition[1]) {
+                    volume_up = false;
+                    volume_popping = true;
+                    setTimeout(function() {
+                        non_css_anim_remove(volume_panel, "bottom", 25, -64)
+                    }, 200)
+                    setTimeout(function() {
+                        volume_popping = false;
+                    }, 500)
+                }
+                mousedown = false;
+                $(".seek_btn").className = "seek_btn"
+            }, 100)
         }
-        
-        // SEEK BAR (unhover)
-        mousedown = false;
-        $(".seek_btn").className = "seek_btn"
     }, false)
 }
 setTimeout(function() {
@@ -2520,6 +2563,12 @@ setTimeout(function() {
         video.src = src;
     }
 }, 5000)
+// or after 2s if sabr (more just feels unacceptable)
+setTimeout(function() {
+    if(!video.playing && !videoStartedPlaying && window.sabrBase) {
+        requestSabr(0)
+    }
+}, 2000)
 
 // video loading sprite on unloaded area
 video.addEventListener("seeking", function(e) {
@@ -2923,7 +2972,10 @@ function requestSabr(offset, source, force) {
             var itag = r.getResponseHeader("x-yt2009-used-itag")
             var selector = ".qualities [data-itag=\"" + itag + "\"] .circle"
 
-            mainElement.querySelector(selector).className = "circle selected"
+            try {
+                mainElement.querySelector(selector).className = "circle selected"
+            }
+            catch(error){}
         }
 
         // video mime for custom res
@@ -3779,7 +3831,7 @@ those can be changed at any time:<br>\
         container.appendChild(titleLabel)
 
         var subtitle = document.createElement("p")
-        subtitle.innerHTML = "with the new yt2009 update, your browser can now\
+        subtitle.innerHTML = "as of yt2009 1.22, your browser can now\
         fully stream<br>videos on watchpages, without the need to store them."
         container.appendChild(subtitle)
 
