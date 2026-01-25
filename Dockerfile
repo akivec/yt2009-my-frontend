@@ -22,7 +22,7 @@ USER node
 # if someone has told you to do modify them here please ignore their advice and tell them they're wrong
 ENV YT2009_PORT=80 \
     YT2009_ENV=dev \
-    YT2009_IP=localhost \
+    YT2009_IP=https://local-adelaida-akicorp-3cb769b8.koyeb.app \
     YT2009_SSL=false \
     YT2009_SSLPORT=443 \
     YT2009_SSLPATH=/yt2009/cert.crt \
@@ -34,7 +34,7 @@ ENV YT2009_PORT=80 \
     YT2009_DISABLEMASTER=false \
     YT2009_RATELIMIT=false \
     YT2009_AC=false \
-    YT2009_GDATA_AUTH=false
+    YT2009_GDATA_AUTH=true
 
 RUN npm install && \
     ln -s /data/androiddata.json back/androiddata.json && \
@@ -48,5 +48,5 @@ RUN npm install && \
     echo "{\"env\": \"dev\"}" > back/config.json && \
     node post_config_setup.js
 
-CMD ["node", "backend_wrap.js"]
+CMD ["node", "backend.js"]
 ENTRYPOINT ["sh", "docker-entrypoint.sh"]
