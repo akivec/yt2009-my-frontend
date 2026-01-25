@@ -1,21 +1,23 @@
-const { spawn } = require("child_process");
-const fetch = require("node-fetch");
-const fs = require("fs");
-const config = require("./config.json");
-const https = require("https");
-const yt2009utils = require("./yt2009utils");
+const child_process = require("child_process")
+const fetch = require("node-fetch")
+const fs = require("fs")
+const config = require("./config.json")
+const https = require("https")
+const yt2009utils = require("./yt2009utils")
+let yt2009_process;
 
-if (!fs.existsSync("./logs/")) {
-    fs.mkdirSync("./logs/");
+if(!fs.existsSync("./logs/")) {
+    fs.mkdirSync("./logs/")
 }
-console.log("logs will be saved to /back/logs/");
+console.log("logs will be saved to /back/logs/")
 
-if (!fs.existsSync("./androiddata.json")) {
+if(!fs.existsSync("./androiddata.json")) {
     const vids = [
         "evJ6gX1lp2o", "dQw4w9WgXcQ", "jNQXAC9IVRw",
         "yQwPhCI_qO0", "ts2a9cW4nLY"
-    ];
-    let rv = vids[Math.floor(Math.random() * vids.length)];
+    ]
+    // test /player fetch to check if we need android sign in on host
+    let rv = vids[Math.floor(Math.random() * vids.length)]
     fetch("https://www.youtube.com/youtubei/v1/player?prettyPrint=false", {
         "credentials": "include",
         "headers": {
@@ -46,9 +48,9 @@ if (!fs.existsSync("./androiddata.json")) {
         "mode": "cors"
     }).then(r => {
         r.json().then(r => {
-            if (r.playabilityStatus && r.playabilityStatus.status !== "OK"
-                && r.playabilityStatus.reason
-                && r.playabilityStatus.reason.includes("Sign in to confirm")) {
+            if((r.playabilityStatus && r.playabilityStatus.status !== "OK"
+            && r.playabilityStatus.reason
+            && r.playabilityStatus.reason.includes("Sign in to confirm"))) {
                 console.log(`
 =====================
 
@@ -60,29 +62,23 @@ backend_wrap for more info.
 
 =====================
 
-`);
+`)
             }
-        });
-    });
+        })
+    })
 }
 
-// merged fix: run backend.js in foreground so Koyeb sees it
 function start_yt2009() {
-    console.log(`yt2009 start at ${new Date().toLocaleString()}`);
-
-    const yt2009 = spawn("node", ["backend.js"], {
-        cwd: __dirname,
-        stdio: "inherit"
-    });
-
-    const logFile = fs.createWriteStream("./logs/" + Date.now() + ".txt");
-    yt2009.stdout?.pipe(logFile);
-    yt2009.stderr?.pipe(logFile);
-
-    yt2009.on("exit", (code) => {
-        console.log(`backend.js exited with code ${code}`);
-        process.exit(code); // let container die so Koyeb restarts it
-    });
+    let commands = [
+        `cd "${__dirname.replace(/\"/g, "\\\"")}" `,
+        `&& node backend.js`
+    ].join("")
+    console.log(`yt2009 start at ${new Date().toLocaleString()}`)
+    yt2009_process = child_process.exec(commands, (error, stdout, stderr) => {
+        fs.writeFileSync("./logs/" + Date.now() + ".txt", stdout + stderr)
+        setTimeout(() => {
+            start_yt2009()
+        }, 3000)
+    })
 }
-
-start_yt2009();
+start_yt2009()
